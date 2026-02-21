@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import AudioVisualizer from './components/AudioVisualizer';
+import LiveTranscription from './components/LiveTranscription';
 
 const API_ENDPOINT = 'http://localhost:8000/api/admin/token';
 const WS_ADMIN_AUDIO = 'ws://localhost:8000/ws/admin/audio'; // Connects to Queue B
@@ -12,9 +13,10 @@ export default function AdminApp() {
     const [adminPassword, setAdminPassword] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-    const [stats, setStats] = useState({ online: false, clients: 0 });
+    const [stats, setStats] = useState({ online: false, clients: 0, active: false });
 
-    const [sessionToken, setSessionToken] = useState('blue-ocean-42');
+    const [draftToken, setDraftToken] = useState('');
+    const [activeToken, setActiveToken] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
     const handleLogin = (e: React.FormEvent) => {
@@ -23,18 +25,55 @@ export default function AdminApp() {
             setIsAuthenticated(true);
             // In production, we'd verify this hash with the server first.
             fetchStats();
+            fetchAdminToken();
+        }
+    };
+
+    const fetchAdminToken = async () => {
+        try {
+            const res = await fetch('http://localhost:8000/api/admin/token', {
+                headers: { 'Authorization': `Bearer ${adminPassword}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.active_token) {
+                    setActiveToken(data.active_token);
+                    setDraftToken(prev => prev === '' ? data.active_token : prev);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch admin token", e);
         }
     };
 
     const fetchStats = async () => {
         try {
-            const res = await fetch(HEALTH_ENDPOINT).catch(() => new Response(JSON.stringify({ soniox_connected: false, active_clients: 0 }), { status: 503 }));
+            const res = await fetch(HEALTH_ENDPOINT).catch(() => new Response(JSON.stringify({ soniox_connected: false, active_clients: 0, soniox_active: false }), { status: 503 }));
             if (!res.ok) throw new Error("Server offline");
             const data = await res.json();
-            setStats({ online: data.soniox_connected, clients: data.active_clients });
+            setStats({ online: data.soniox_connected, clients: data.active_clients, active: data.soniox_active });
         } catch (e) {
             // Silently handle expected network failures when the server is down
-            setStats({ online: false, clients: 0 });
+            setStats({ online: false, clients: 0, active: false });
+        }
+    };
+
+    const toggleSoniox = async () => {
+        const newActiveState = !stats.active;
+        // Optimistic UI update
+        setStats(prev => ({ ...prev, active: newActiveState }));
+        try {
+            await fetch('http://localhost:8000/api/admin/soniox/toggle', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${adminPassword}`
+                },
+                body: JSON.stringify({ active: newActiveState })
+            });
+            fetchStats();
+        } catch (e) {
+            console.error("Failed to toggle Soniox connection", e);
         }
     };
 
@@ -48,18 +87,23 @@ export default function AdminApp() {
         const adj = WORD_BANK_ADJ[Math.floor(Math.random() * WORD_BANK_ADJ.length)];
         const noun = WORD_BANK_NOUNS[Math.floor(Math.random() * WORD_BANK_NOUNS.length)];
         const num = Math.floor(Math.random() * 99) + 1;
-        setSessionToken(`${adj}-${noun}-${num}`);
+        setDraftToken(`${adj}-${noun}-${num}`);
     };
 
     const saveToken = async () => {
         setSaveStatus('saving');
         try {
-            const res = await fetch(`${API_ENDPOINT}?new_token=${sessionToken}`, {
+            const res = await fetch(API_ENDPOINT, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${adminPassword}` }
+                headers: {
+                    'Authorization': `Bearer ${adminPassword}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ new_token: draftToken })
             });
             if (res.ok) {
                 setSaveStatus('saved');
+                setActiveToken(draftToken);
                 setTimeout(() => setSaveStatus('idle'), 2000);
             } else {
                 setSaveStatus('error');
@@ -116,10 +160,20 @@ export default function AdminApp() {
                     <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden group">
                         <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                         <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider">Translation API</span>
-                        <div className={`text-3xl font-bold tracking-tight ${stats.online ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {stats.online ? 'ONLINE' : 'OFFLINE'}
+
+                        <div className="flex items-center gap-3 mb-3 z-10">
+                            <span className="text-xs font-semibold text-slate-500 w-6 text-right">{stats.active ? 'ON' : 'OFF'}</span>
+                            <button
+                                onClick={toggleSoniox}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${stats.active ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-slate-600 hover:bg-slate-500'}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${stats.active ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
                         </div>
-                        <span className="text-xs text-slate-500 mt-3 font-medium">Soniox WS Connection</span>
+
+                        <div className={`text-xl font-bold tracking-tight ${stats.online ? 'text-emerald-400' : 'text-slate-500'}`}>
+                            {stats.online ? 'CONNECTED' : 'STANDBY'}
+                        </div>
                     </div>
 
                     <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden group">
@@ -142,54 +196,62 @@ export default function AdminApp() {
                     </div>
                 </div>
 
-                {/* Token Management */}
-                <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
-                    <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Session Token Manager</h3>
-                    <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-2xl">
-                        This token securely gates the public broadcast. Listeners must enter this token to receive the translated audio streams. Generating a new token locks out legacy connections.
-                    </p>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    {/* Token Management */}
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
+                        <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Session Token Manager</h3>
+                        <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-2xl">
+                            This token securely gates the public broadcast. Listeners must enter this token to receive the translated audio streams. Generating a new token locks out legacy connections.
+                        </p>
 
-                    <div className="flex flex-col sm:flex-row gap-4">
-                        <input
-                            type="text"
-                            value={sessionToken}
-                            onChange={(e) => setSessionToken(e.target.value)}
-                            className="flex-1 bg-slate-900/50 border border-slate-700/50 p-4 rounded-xl text-xl text-center sm:text-left tracking-widest text-emerald-400 font-mono shadow-inner focus:outline-none focus:border-indigo-500 transition-colors"
-                        />
-                        <div className="flex gap-4">
-                            <button
-                                onClick={generateRandomToken}
-                                className="px-6 py-3 bg-slate-700/50 hover:bg-slate-600 border border-slate-600/50 rounded-xl font-medium transition-colors text-slate-200"
-                            >
-                                Roll Token
-                            </button>
-                            <button
-                                onClick={saveToken}
-                                className={`px-8 py-3 rounded-xl font-medium transition-all shadow-lg min-w-[140px] border border-transparent ${saveStatus === 'idle' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 shadow-indigo-500/25 text-white' :
-                                    saveStatus === 'saving' ? 'bg-indigo-500 text-white animate-pulse' :
-                                        saveStatus === 'saved' ? 'bg-emerald-500 text-white shadow-emerald-500/25 border-emerald-400' :
-                                            'bg-rose-500 text-white shadow-rose-500/25 border-rose-400'
-                                    }`}
-                            >
-                                {saveStatus === 'idle' && 'Apply Policy'}
-                                {saveStatus === 'saving' && 'Syncing...'}
-                                {saveStatus === 'saved' && 'Enforced!'}
-                                {saveStatus === 'error' && 'Sync Failed'}
-                            </button>
+                        <div className="flex flex-col gap-4">
+                            <input
+                                type="text"
+                                value={draftToken}
+                                onChange={(e) => setDraftToken(e.target.value)}
+                                className="w-full bg-slate-900/50 border border-slate-700/50 p-4 rounded-xl text-xl text-center tracking-widest text-emerald-400 font-mono shadow-inner focus:outline-none focus:border-indigo-500 transition-colors"
+                            />
+                            <div className="flex gap-4 w-full">
+                                <button
+                                    onClick={generateRandomToken}
+                                    className="px-6 py-3 flex-1 bg-slate-700/50 hover:bg-slate-600 border border-slate-600/50 rounded-xl font-medium transition-colors text-slate-200"
+                                >
+                                    Generate Token
+                                </button>
+                                <button
+                                    onClick={saveToken}
+                                    className={`px-8 py-3 flex-1 rounded-xl font-medium transition-all shadow-lg min-w-[140px] border border-transparent ${saveStatus === 'idle' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 shadow-indigo-500/25 text-white' :
+                                        saveStatus === 'saving' ? 'bg-indigo-500 text-white animate-pulse' :
+                                            saveStatus === 'saved' ? 'bg-emerald-500 text-white shadow-emerald-500/25 border-emerald-400' :
+                                                'bg-rose-500 text-white shadow-rose-500/25 border-rose-400'
+                                        }`}
+                                >
+                                    {saveStatus === 'idle' && 'Apply'}
+                                    {saveStatus === 'saving' && 'Syncing...'}
+                                    {saveStatus === 'saved' && 'Enforced!'}
+                                    {saveStatus === 'error' && 'Sync Failed'}
+                                </button>
+                            </div>
+                            <div className="text-center text-sm font-medium text-slate-400 mt-2">
+                                Current token: <span className="text-indigo-400 italic font-mono px-2">{activeToken || 'Initializing...'}</span>
+                            </div>
                         </div>
+                    </div>
+
+                    {/* Live Audio Ingest Visualizer */}
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
+                        <div className="flex justify-between items-center mb-6">
+                            <div>
+                                <h3 className="text-xl font-bold text-white tracking-tight">Audio Ingest Pipeline</h3>
+                                <p className="text-sm text-slate-400 mt-1">Real-time PCM visualization from zero-latency Queue B</p>
+                            </div>
+                        </div>
+                        <AudioVisualizer wsEndpoint={WS_ADMIN_AUDIO} adminPassword={adminPassword} />
                     </div>
                 </div>
 
-                {/* Live Audio Ingest Visualizer */}
-                <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
-                    <div className="flex justify-between items-center mb-6">
-                        <div>
-                            <h3 className="text-xl font-bold text-white tracking-tight">Audio Ingest Pipeline</h3>
-                            <p className="text-sm text-slate-400 mt-1">Real-time PCM visualization from zero-latency Queue B</p>
-                        </div>
-                    </div>
-                    <AudioVisualizer wsEndpoint={`${WS_ADMIN_AUDIO}?authorization=${adminPassword}`} />
-                </div>
+                {/* Live Transcription Monitor */}
+                <LiveTranscription sessionToken={activeToken} />
 
             </div>
         </div>

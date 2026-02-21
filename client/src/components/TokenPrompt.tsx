@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
 
 interface TokenPromptProps {
-    onTokenSubmit: (token: str) => void;
+    onTokenSubmit: (token: string) => void;
     error?: string;
+    isLoading?: boolean;
 }
 
-export default function TokenPrompt({ onTokenSubmit, error }: TokenPromptProps) {
+export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }: TokenPromptProps) {
     const [inputVal, setInputVal] = useState('');
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (inputVal.trim()) {
+        if (inputVal.trim() && !isLoading) {
             onTokenSubmit(inputVal.trim());
         }
     };
@@ -46,9 +47,10 @@ export default function TokenPrompt({ onTokenSubmit, error }: TokenPromptProps) 
 
                     <button
                         type="submit"
-                        className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition duration-150 font-medium"
+                        disabled={isLoading}
+                        className={`w-full text-white py-2 px-4 rounded-md transition duration-150 font-medium ${isLoading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
                     >
-                        Connect to Stream
+                        {isLoading ? 'Verifying...' : 'Connect to Stream'}
                     </button>
                 </form>
             </div>

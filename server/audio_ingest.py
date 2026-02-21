@@ -45,7 +45,6 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
                     queue_a.put_nowait(data)
                 except (asyncio.QueueEmpty, asyncio.QueueFull):
                     pass
-                print("WARNING: queue_a (Soniox Audio Queue) is full. Dropping oldest audio frame.")
                 
             # 3. Forward to Admin Dashboard (Best Effort - Drop oldest if full)
             try:

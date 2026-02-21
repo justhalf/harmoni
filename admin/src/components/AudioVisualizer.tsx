@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface VisualizerProps {
     wsEndpoint: string;
+    adminPassword: string;
 }
 
-export default function AudioVisualizer({ wsEndpoint }: VisualizerProps) {
+export default function AudioVisualizer({ wsEndpoint, adminPassword }: VisualizerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
@@ -28,6 +29,7 @@ export default function AudioVisualizer({ wsEndpoint }: VisualizerProps) {
             ws.binaryType = "arraybuffer";
 
             ws.onopen = () => {
+                ws.send(JSON.stringify({ authorization: adminPassword }));
                 console.log("Admin Queue B Connected");
                 setIsRendering(true);
             };

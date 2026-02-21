@@ -4,16 +4,11 @@ import TokenPrompt from './components/TokenPrompt';
 // Replace with wss://example.com/ws/listen in production
 const WS_ENDPOINT = 'ws://localhost:8000/ws/listen';
 
-interface TranslationToken {
-    text: string;
-    is_final: boolean;
-    language: string;
-}
-
 export default function App() {
     const [sessionToken, setSessionToken] = useState<string | null>(null);
     const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState<string>('');
+    const [isValidating, setIsValidating] = useState<boolean>(false);
 
     // State for the streaming text - English
     const [finalTextEn, setFinalTextEn] = useState<string>('');
@@ -26,6 +21,9 @@ export default function App() {
     const wsRef = useRef<WebSocket | null>(null);
     const scrollRefEn = useRef<HTMLDivElement>(null);
     const scrollRefId = useRef<HTMLDivElement>(null);
+
+    const [reconnectTrigger, setReconnectTrigger] = useState(0);
+    const reconnectTimeoutRef = useRef<number | null>(null);
 
     // Auto-scroll to bottom as new text streams in
     useEffect(() => {
@@ -41,10 +39,11 @@ export default function App() {
         if (!sessionToken) return;
 
         setConnectionState('connecting');
-        const ws = new WebSocket(`${WS_ENDPOINT}?token=${sessionToken}`);
+        const ws = new WebSocket(WS_ENDPOINT);
         wsRef.current = ws;
 
         ws.onopen = () => {
+            ws.send(JSON.stringify({ token: sessionToken, is_admin: false }));
             setConnectionState('connected');
             setErrorMsg('');
         };
@@ -90,7 +89,11 @@ export default function App() {
                 setErrorMsg('Invalid session token. You have been disconnected.');
                 setSessionToken(null);
             } else {
-                setErrorMsg('Connection to server lost.');
+                setErrorMsg('Connection to server lost. Reconnecting in 3s...');
+                // Auto-reconnect
+                reconnectTimeoutRef.current = window.setTimeout(() => {
+                    setReconnectTrigger(prev => prev + 1);
+                }, 3000);
             }
         };
 
@@ -99,13 +102,44 @@ export default function App() {
         };
 
         return () => {
+            ws.onclose = null;
+            ws.onerror = null;
             ws.close();
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+            }
         };
-    }, [sessionToken]);
+    }, [sessionToken, reconnectTrigger]);
+
+    // Pre-validate token via HTTP before attempting WebSocket connection
+    const validateToken = async (token: string) => {
+        setIsValidating(true);
+        setErrorMsg('');
+        try {
+            const res = await fetch('http://localhost:8000/api/verify-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token })
+            });
+            if (!res.ok) throw new Error("Server unreachable");
+
+            const data = await res.json();
+            if (data.valid) {
+                setSessionToken(token);
+            } else {
+                setErrorMsg('Invalid session token. Please try again.');
+            }
+        } catch (err) {
+            setErrorMsg('Could not verify token with the broadcast server.');
+            console.error(err);
+        } finally {
+            setIsValidating(false);
+        }
+    };
 
     // Render the token gate if unauthenticated
     if (!sessionToken) {
-        return <TokenPrompt onTokenSubmit={setSessionToken} error={errorMsg} />;
+        return <TokenPrompt onTokenSubmit={validateToken} error={errorMsg} isLoading={isValidating} />;
     }
 
     // Render the main viewer
