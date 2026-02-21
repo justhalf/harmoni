@@ -1,81 +1,79 @@
 import asyncio
 import os
 import json
-from soniox.speech_service import Client
-from soniox.transcribe_live import transcribe_stream
-from .models import ConnectionManager, ActiveSession
+from soniox import AsyncSonioxClient
+from soniox.types import RealtimeSTTConfig, TranslationConfig
+from models import ConnectionManager, ActiveSession
+
+from dotenv import load_dotenv
+load_dotenv()
 
 # Ensure this is set via environment variable
 SONIOX_API_KEY = os.getenv("SONIOX_API_KEY", "missing_key")
 
 async def soniox_translation_task(audio_queue: asyncio.Queue, manager: ConnectionManager, session: ActiveSession):
     """
-    Maintains a single authenticated session to the Soniox Real-Time API.
+    Maintains a single authenticated session to the Soniox Real-Time API using the official AsyncSonioxClient.
     Pulls binary audio off Queue A, sends it to Soniox, and broadcasts text tokens to all users.
     """
-    client = Client(api_key=SONIOX_API_KEY)
-
-    # Since we are using the official Client wrapper, we can pass our audio queue generator
-    def audio_generator():
-        while True:
-            try:
-                # We need blocking/timeout for generator so it doesn't spin, but we are inside an async event loop
-                # PyAudio chunks are coming in hot so an async to sync queue wrapper or simple yield is needed.
-                # For this scaffolding, we use a simple loop. In production, an AsyncIterator is required for the soniox client.
-                pass
-            except Exception:
-                break
-                
-    # Note: Modern Soniox Python SDKs handle async natively via AsyncRealtimeSTTSession or websockets directly.
-    # Below is the architecture for direct websocket interaction mapping to the Japan regional endpoint.
+    client = AsyncSonioxClient(api_key=SONIOX_API_KEY)
     
-    import websockets
-    
-    req_url = "wss://stt-rt.jp.soniox.com/transcribe-websocket"
-    
-    auth_request = {
-        "api_key": SONIOX_API_KEY,
-        "sample_rate_hertz": 16000,
-        "language_hints_strict": False,
-        "language_hints": ["id", "en"],
-        "translation": {
-            "type": "one_way",
-            "target_language": "en"
-        }
-    }
+    config = RealtimeSTTConfig(
+        model="stt-rt-v4",
+        audio_format="pcm_s16le",
+        sample_rate=16000,
+        num_channels=1,
+        language_hints=["id", "en"],
+        language_hints_strict=False,
+        enable_endpoint_detection=True,
+        translation=TranslationConfig(
+            type="one_way",
+            target_language="en"
+        )
+    )
     
     while True:
         try:
-            async with websockets.connect(req_url) as ws:
+            print("Connecting to Soniox via AsyncSonioxClient...")
+            async with client.realtime.stt.connect(config=config) as soniox_session:
                 session.soniox_connected = True
-                print("Connected to Soniox (Japan Region)")
+                print("Connected to Soniox")
                 
-                # 1. Send authentication and config
-                await ws.send(json.dumps(auth_request))
-                
-                # 2. Wait for successful start response
-                start_res = await ws.recv()
-                
+                # Flush existing old audio so we only send fresh live audio to Soniox
+                while not audio_queue.empty():
+                    try:
+                        audio_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                        
                 async def send_audio():
                     while True:
                         try:
                             # Pull from Queue A
                             chunk = await audio_queue.get()
                             # Send binary audio frame
-                            await ws.send(chunk)
+                            await soniox_session.send_byte_chunk(chunk)
                         except Exception as e:
                             print(f"Error sending audio to Soniox: {e}")
                             break
                             
                 async def receive_text():
-                    while True:
+                    async for event in soniox_session.receive_events():
                         try:
-                            response = await ws.recv()
-                            payload = json.loads(response)
-                            # 3. Fast Fan-out: Broadcast directly to React Clients
+                            if event.error_code:
+                                print(f"Soniox API Error ({event.error_code}): {event.error_message}")
+                                break
+                            
+                            # Broadcast the model dict back to clients
+                            payload = event.model_dump(exclude_none=True)
                             await manager.broadcast(payload)
+                            
+                            if event.finished:
+                                print("Soniox session finished gracefully.")
+                                break
+                                
                         except Exception as e:
-                            print(f"Error receiving from Soniox: {e}")
+                            print(f"Error broadcasting from Soniox: {e}")
                             break
                             
                 # Run send and receive concurrently

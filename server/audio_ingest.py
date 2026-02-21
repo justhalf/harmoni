@@ -1,7 +1,7 @@
 import asyncio
 import pyaudio
 import time
-from .models import ActiveSession
+from models import ActiveSession
 
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
@@ -40,15 +40,22 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
             try:
                 queue_a.put_nowait(data)
             except asyncio.QueueFull:
-                # Soniox socket is backed up; we should probably log this warning
-                pass
+                try:
+                    queue_a.get_nowait()
+                    queue_a.put_nowait(data)
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    pass
+                print("WARNING: queue_a (Soniox Audio Queue) is full. Dropping oldest audio frame.")
                 
-            # 3. Forward to Admin Dashboard (Best Effort - Drop if full)
+            # 3. Forward to Admin Dashboard (Best Effort - Drop oldest if full)
             try:
                 queue_b.put_nowait(data)
             except asyncio.QueueFull:
-                # Silently drop frames so viz doesn't slow down the main translation pipeline
-                pass
+                try:
+                    queue_b.get_nowait()
+                    queue_b.put_nowait(data)
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    pass
                 
             await asyncio.sleep(0.001)
             

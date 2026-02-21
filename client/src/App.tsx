@@ -42,20 +42,26 @@ export default function App() {
         };
 
         ws.onmessage = (event) => {
-            // The Python server sends Soniox JSON payload
-            // According to Soniox docs, it might be an array of tokens
-            // For this scaffold, we handle a simplified token object structure
             try {
                 const payload = JSON.parse(event.data);
 
-                // Complex state mapping (Simplified for architecture proof)
-                // In a true implementation, mapping the exact word indices and `is_final` is key.
-                if (payload.is_final) {
-                    setFinalText(prev => prev + ' ' + payload.text);
-                    setDraftText(''); // Clear draft when a final token lands
-                } else {
-                    // Replace entire draft view
-                    setDraftText(payload.text);
+                if (payload.tokens && Array.isArray(payload.tokens)) {
+                    let newFinalTokens = '';
+                    let newDraftTokens = '';
+
+                    payload.tokens.forEach((token: any) => {
+                        if (token.is_final) {
+                            newFinalTokens += token.text;
+                        } else {
+                            newDraftTokens += token.text;
+                        }
+                    });
+
+                    if (newFinalTokens) {
+                        setFinalText(prev => prev + newFinalTokens);
+                    }
+                    // draftText reflects the current incomplete utterance
+                    setDraftText(newDraftTokens);
                 }
             } catch (err) {
                 console.error("Failed to parse token payload", err);

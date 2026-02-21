@@ -27,14 +27,43 @@ export default function AudioVisualizer({ wsEndpoint }: VisualizerProps) {
             setIsRendering(true);
         };
 
-        ws.onmessage = (event) => {
-            // In production, Queue B pipes Int16 raw PCM arrays over the socket.
-            // We read the Int16Array, map to Float32, and write to a buffer to feed the AudioContext/Analyser.
-            // For this scaffold, we trigger the visual render loop when data flows.
+        let nextStartTime = 0;
 
+        ws.onmessage = (event) => {
+            const ctx = audioCtxRef.current;
+            const analyser = analyserRef.current;
+            if (!ctx || !analyser) return;
+
+            // In production, Queue B pipes Int16 raw PCM arrays over the socket.
             const pcmData = new Int16Array(event.data);
-            // Dummy processing to populate frequency data:
-            // We would normally pipe this into an AudioBufferSourceNode connected to the analyser.
+            const floatData = new Float32Array(pcmData.length);
+
+            // Normalize Int16 to Float32 (-1.0 to 1.0) for Web Audio API
+            for (let i = 0; i < pcmData.length; i++) {
+                floatData[i] = pcmData[i] / 32768.0;
+            }
+
+            // Create an AudioBuffer and copy the normalized samples
+            const audioBuffer = ctx.createBuffer(1, floatData.length, ctx.sampleRate);
+            audioBuffer.copyToChannel(floatData, 0);
+
+            // Play the buffer securely through the analyser node
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(analyser);
+
+            // Connect to a silent gain node so it processes correctly without recursive feedback or deafening feedback loops
+            const silentNode = ctx.createGain();
+            silentNode.gain.value = 0;
+            analyser.connect(silentNode);
+            silentNode.connect(ctx.destination);
+
+            // Schedule gapless playback
+            if (nextStartTime < ctx.currentTime) {
+                nextStartTime = ctx.currentTime;
+            }
+            source.start(nextStartTime);
+            nextStartTime += audioBuffer.duration;
         };
 
         ws.onclose = () => setIsRendering(false);

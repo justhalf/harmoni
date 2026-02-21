@@ -2,9 +2,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import time
-from .models import ConnectionManager, ActiveSession
-from .audio_ingest import audio_ingest_task
-from .soniox_client import soniox_translation_task
+from models import ConnectionManager, ActiveSession
+from audio_ingest import audio_ingest_task
+from soniox_client import soniox_translation_task
 import os
 
 app = FastAPI(title="Soniox Translation Broadcast Hub")
@@ -26,6 +26,9 @@ async def startup_event():
     # Start the async audio and soniox tasks in the background
     audio_queue_a = asyncio.Queue(maxsize=100) # Soniox Queue
     audio_queue_b = asyncio.Queue(maxsize=100) # Admin Viz Queue
+    
+    # Store queue_b in app state so the visualizer endpoint can consume it
+    app.state.audio_queue_b = audio_queue_b
     
     app.state.audio_ingest_task = asyncio.create_task(
         audio_ingest_task(audio_queue_a, audio_queue_b, session_state)
@@ -93,10 +96,28 @@ async def admin_audio_viz(websocket: WebSocket, authorization: str = None):
         return
         
     await websocket.accept()
-    # In a fully fleshed out version, this loops consuming audio_queue_b
-    # and dropping frames if websocket.send_bytes gets backed up.
+    
+    # Retrieve the active Queue B created during startup
+    audio_queue_b = websocket.app.state.audio_queue_b
+    
+    # Flush existing old audio so visualization starts instantly with live audio
+    while not audio_queue_b.empty():
+        try:
+            audio_queue_b.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+            
     try:
         while True:
-            await asyncio.sleep(1) # Stub
+            # Wait for the next chunk of PCM audio from the ingest task
+            chunk = await audio_queue_b.get()
+            
+            # Send the raw binary chunk to the React AudioVisualizer
+            await websocket.send_bytes(chunk)
+            
+            # Optional: Small yield to event loop to prevent blocking if queue is massive
+            await asyncio.sleep(0.001)
     except WebSocketDisconnect:
+        # Admin closed the dashboard tab
+        print("Admin Visualizer Disconnected.")
         pass
