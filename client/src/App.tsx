@@ -117,6 +117,66 @@ export default function App() {
         }
     };
 
+    // TTS Options
+    const [isTtsEnabled, setIsTtsEnabled] = useState(false);
+    const [ttsVolume, setTtsVolume] = useState(() => {
+        return parseFloat(localStorage.getItem('ttsVolume') || '1.0');
+    });
+    const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => {
+        return localStorage.getItem('ttsVoice') || '';
+    });
+    const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+    useEffect(() => {
+        localStorage.setItem('ttsVolume', ttsVolume.toString());
+    }, [ttsVolume]);
+
+    useEffect(() => {
+        localStorage.setItem('ttsVoice', selectedVoiceURI);
+    }, [selectedVoiceURI]);
+
+    useEffect(() => {
+        const loadVoices = () => {
+            const availableVoices = window.speechSynthesis.getVoices();
+            setVoices(availableVoices);
+            if (availableVoices.length > 0 && !selectedVoiceURI) {
+                // Default to an English voice if available, otherwise first voice
+                const defaultVoice = availableVoices.find(v => v.lang.startsWith('en')) || availableVoices[0];
+                setSelectedVoiceURI(defaultVoice.voiceURI);
+            }
+        };
+
+        loadVoices();
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+    }, [selectedVoiceURI]);
+
+    useEffect(() => {
+        if (!isTtsEnabled) {
+            window.speechSynthesis.cancel();
+        }
+    }, [isTtsEnabled]);
+
+    // Refs for TTS settings to avoid WS reconnects on state changes
+    const ttsSettingsRef = useRef({
+        enabled: isTtsEnabled,
+        volume: ttsVolume,
+        voiceURI: selectedVoiceURI,
+        voices: voices
+    });
+
+    useEffect(() => {
+        ttsSettingsRef.current = {
+            enabled: isTtsEnabled,
+            volume: ttsVolume,
+            voiceURI: selectedVoiceURI,
+            voices: voices
+        };
+    }, [isTtsEnabled, ttsVolume, selectedVoiceURI, voices]);
+
+    const ttsBufferRef = useRef('');
+
     // Buffer for Indonesian words arriving before English chunks
     const pendingIndRef = useRef('');
 
@@ -233,6 +293,17 @@ export default function App() {
                         // This prevents highlight bugs and popovers attaching to invisible space
                         if (token.text === '<end>') {
                             if (token.is_final) {
+                                // Flush TTS buffer if enabled
+                                const tts = ttsSettingsRef.current;
+                                if (tts.enabled && ttsBufferRef.current.trim()) {
+                                    const utterance = new SpeechSynthesisUtterance(ttsBufferRef.current.trim());
+                                    utterance.volume = tts.volume;
+                                    const voice = tts.voices.find(v => v.voiceURI === tts.voiceURI);
+                                    if (voice) utterance.voice = voice;
+                                    window.speechSynthesis.speak(utterance);
+                                }
+                                ttsBufferRef.current = '';
+
                                 // Flush anything currently in the buffer before adding the break
                                 if (currentSpanEn || pendingIndRef.current) {
                                     incomingSpans.push({
@@ -252,6 +323,7 @@ export default function App() {
                             if (isTranslation) {
                                 // Accumulate translation text within this frame
                                 currentSpanEn += token.text;
+                                ttsBufferRef.current += token.text;
                             }
                             if (isOriginal) {
                                 // Accumulate original text to be attached to the upcoming translation
@@ -403,9 +475,8 @@ export default function App() {
                     {/* Desktop Center Menu Strip */}
                     <div className="hidden sm:flex items-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm mx-4 relative" onClick={(e) => e.stopPropagation()}>
                         <button
-                            disabled
-                            onClick={(e) => { e.stopPropagation(); }}
-                            className={`rounded-l-lg px-4 py-2 flex flex-row items-center justify-center transition-colors border-r border-gray-200 dark:border-gray-700 focus:outline-none text-gray-400 dark:text-gray-500 opacity-50 cursor-not-allowed`}
+                            onClick={(e) => { e.stopPropagation(); setIsTtsEnabled(!isTtsEnabled); }}
+                            className={`rounded-l-lg px-4 py-2 flex flex-row items-center justify-center transition-colors border-r border-gray-200 dark:border-gray-700 focus:outline-none ${isTtsEnabled ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-gray-100'}`}
                         >
                             <svg className="w-5 h-5 mr-1.5" fill="none" viewBox="-2 -2 28 28" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12V9a9 9 0 00-18 0v3m0 0a3 3 0 00-3 3v2a3 3 0 003 3h2a1 1 0 001-1v-6a1 1 0 00-1-1H3m18 0a3 3 0 013 3v2a3 3 0 01-3 3h-2a1 1 0 01-1-1v-6a1 1 0 011-1h2z" /></svg>
                             <span className="text-sm font-medium">Listen</span>
@@ -457,6 +528,33 @@ export default function App() {
                                         </button>
                                     </div>
                                 </div>
+
+                                <div className="mb-4">
+                                    <label className="text-xs text-gray-500 dark:text-gray-400 font-semibold mb-2 block">Voice Volume</label>
+                                    <input
+                                        type="range" min="0" max="1" step="0.1"
+                                        value={ttsVolume}
+                                        onChange={(e) => setTtsVolume(parseFloat(e.target.value))}
+                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-blue-500"
+                                    />
+                                </div>
+
+                                {voices.length > 0 && (
+                                    <div className="mb-4">
+                                        <label className="text-xs text-gray-500 dark:text-gray-400 font-semibold mb-2 block">Voice Selection</label>
+                                        <select
+                                            value={selectedVoiceURI}
+                                            onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                                            className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2"
+                                        >
+                                            {voices.filter(v => v.lang.startsWith('en') || v.lang.startsWith('id')).map(voice => (
+                                                <option key={voice.voiceURI} value={voice.voiceURI}>
+                                                    {voice.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
 
                                 <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700">
                                     <div className="flex items-center space-x-2">
@@ -705,7 +803,34 @@ export default function App() {
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-between py-2">
+                        <div className="mb-5">
+                            <label className="text-xs text-gray-500 dark:text-gray-400 font-semibold mb-3 block">Voice Volume</label>
+                            <input
+                                type="range" min="0" max="1" step="0.1"
+                                value={ttsVolume}
+                                onChange={(e) => setTtsVolume(parseFloat(e.target.value))}
+                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-blue-500"
+                            />
+                        </div>
+
+                        {voices.length > 0 && (
+                            <div className="mb-6">
+                                <label className="text-xs text-gray-500 dark:text-gray-400 font-semibold mb-3 block">Voice Selection</label>
+                                <select
+                                    value={selectedVoiceURI}
+                                    onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                                    className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5"
+                                >
+                                    {voices.filter(v => v.lang.startsWith('en') || v.lang.startsWith('id')).map(voice => (
+                                        <option key={voice.voiceURI} value={voice.voiceURI}>
+                                            {voice.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+
+                        <div className="flex items-center justify-between py-2 border-t border-gray-100 dark:border-gray-700 pt-5">
                             <div className="flex items-center space-x-3">
                                 {isDarkMode ? (
                                     <svg className="w-6 h-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
@@ -727,9 +852,8 @@ export default function App() {
                 {/* Mobile Bottom Navigation Bar */}
                 <div className="sm:hidden shrink-0 h-16 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex justify-around items-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-40 transition-colors duration-200 relative">
                     <button
-                        disabled
-                        onClick={(e) => { e.stopPropagation(); }}
-                        className={`p-2 flex flex-col items-center justify-center focus:outline-none transition-colors text-gray-400 dark:text-gray-500 opacity-50 cursor-not-allowed`}
+                        onClick={(e) => { e.stopPropagation(); setIsTtsEnabled(!isTtsEnabled); }}
+                        className={`p-2 flex flex-col items-center justify-center focus:outline-none transition-colors ${isTtsEnabled ? 'text-blue-500' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'}`}
                     >
                         <svg className="w-6 h-6 mb-1" fill="none" viewBox="-2 -2 28 28" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12V9a9 9 0 00-18 0v3m0 0a3 3 0 00-3 3v2a3 3 0 003 3h2a1 1 0 001-1v-6a1 1 0 00-1-1H3m18 0a3 3 0 013 3v2a3 3 0 01-3 3h-2a1 1 0 01-1-1v-6a1 1 0 011-1h2z" /></svg>
                         <span className="text-xs font-medium">Listen</span>
