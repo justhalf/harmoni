@@ -37,10 +37,8 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
     
     while True:
         try:
-            logger.info("Connecting to Soniox via AsyncSonioxClient...")
             async with client.realtime.stt.connect(config=config) as soniox_session:
                 session.soniox_connected = True
-                logger.info("Connected to Soniox")
                 
                 # Flush existing old audio so we only send fresh live audio to Soniox
                 while not audio_queue.empty():
@@ -56,15 +54,13 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                             chunk = await audio_queue.get()
                             # Send binary audio frame
                             await soniox_session.send_byte_chunk(chunk)
-                        except Exception as e:
-                            logger.error(f"Error sending audio to Soniox: {e}")
+                        except Exception:
                             break
                             
                 async def receive_text():
                     async for event in soniox_session.receive_events():
                         try:
                             if event.error_code:
-                                logger.error(f"Soniox API Error ({event.error_code}): {event.error_message}")
                                 break
                             
                             # Broadcast the model dict back to clients
@@ -72,11 +68,9 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                             await manager.broadcast(payload)
                             
                             if event.finished:
-                                logger.info("Soniox session finished gracefully.")
                                 break
                                 
-                        except Exception as e:
-                            logger.error(f"Error broadcasting from Soniox: {e}")
+                        except Exception:
                             break
                             
                 # Run send and receive concurrently
@@ -87,5 +81,4 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                 
         except Exception as e:
             session.soniox_connected = False
-            logger.warning(f"Soniox connection dropped: {e}. Retrying in 5s...")
             await asyncio.sleep(5)

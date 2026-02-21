@@ -7,6 +7,7 @@ const WS_ENDPOINT = 'ws://localhost:8000/ws/listen';
 export default function App() {
     const [sessionToken, setSessionToken] = useState<string | null>(null);
     const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+    const [sonioxActive, setSonioxActive] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string>('');
     const [isValidating, setIsValidating] = useState<boolean>(false);
 
@@ -51,6 +52,12 @@ export default function App() {
         ws.onmessage = (event) => {
             try {
                 const payload = JSON.parse(event.data);
+
+                // Handle server-push status updates
+                if (payload.type === 'status') {
+                    setSonioxActive(payload.soniox_active ?? false);
+                    return;
+                }
 
                 if (payload.tokens && Array.isArray(payload.tokens)) {
                     let newFinalEn = '';
@@ -150,7 +157,7 @@ export default function App() {
                 {/* Header Strip */}
                 <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-lg shadow">
                     <div className="flex items-center space-x-4">
-                        <h1 className="text-xl font-bold text-gray-800">Live Translation Broadcast</h1>
+                        <h1 className="text-xl font-bold text-gray-800">GPBB Harmoni Translation</h1>
                         <button
                             onClick={() => {
                                 setFinalTextEn('');
@@ -166,7 +173,8 @@ export default function App() {
                     <div className="flex items-center space-x-2">
                         <span className="text-sm text-gray-500">Status:</span>
                         {connectionState === 'connecting' && <span className="text-yellow-500 font-medium">Connecting...</span>}
-                        {connectionState === 'connected' && <span className="text-green-500 font-medium">Live</span>}
+                        {connectionState === 'connected' && sonioxActive && <span className="text-green-500 font-medium">● Live</span>}
+                        {connectionState === 'connected' && !sonioxActive && <span className="text-yellow-500 font-medium">● Stand By</span>}
                         {connectionState === 'error' && <span className="text-red-500 font-medium">Disconnected</span>}
                     </div>
                 </div>

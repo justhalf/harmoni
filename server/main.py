@@ -55,8 +55,7 @@ async def audio_viz_broadcaster_task(audio_queue_b: asyncio.Queue, manager: Conn
                 await manager.broadcast_audio(chunk)
         except asyncio.CancelledError:
             break
-        except Exception as e:
-            logger.error(f"Broadcaster task error: {e}")
+        except Exception:
             break
 
 @app.on_event("startup")
@@ -106,6 +105,13 @@ async def websocket_endpoint(websocket: WebSocket):
         return
 
     await manager.connect(websocket, is_admin)
+
+    # Push initial status so the client immediately knows Stand By vs Live
+    try:
+        await websocket.send_json({"type": "status", "soniox_active": session_state.soniox_active})
+    except Exception:
+        pass
+
     try:
         while True:
             # Keep connection alive, listen for client drops
@@ -162,6 +168,7 @@ async def toggle_soniox(req: SonioxToggleReq, authorization: str = Header(None))
         app.state.soniox_task = asyncio.create_task(
             soniox_translation_task(app.state.audio_queue_a, manager, session_state)
         )
+        await manager.broadcast({"type": "status", "soniox_active": True})
         return {"status": "started"}
         
     # Stop task
@@ -170,6 +177,7 @@ async def toggle_soniox(req: SonioxToggleReq, authorization: str = Header(None))
         app.state.soniox_task.cancel()
         app.state.soniox_task = None
         session_state.soniox_connected = False
+        await manager.broadcast({"type": "status", "soniox_active": False})
         return {"status": "stopped"}
         
     return {"status": "no_change"}

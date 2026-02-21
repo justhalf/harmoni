@@ -24,7 +24,7 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
                     input=True,
                     frames_per_buffer=CHUNK)
                     
-    logger.info("Audio Ingest Stream Started.")
+
     
     try:
         while True:
@@ -62,9 +62,9 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
             await asyncio.sleep(0.001)
             
     except asyncio.CancelledError:
-        logger.info("Audio Ingest Task Cancelled.")
+        pass
     except Exception as e:
-        logger.error(f"Unexpected error in audio_ingest: {e}")
+        pass
     finally:
         stream.stop_stream()
         stream.close()

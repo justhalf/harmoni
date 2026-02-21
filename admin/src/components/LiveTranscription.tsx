@@ -8,6 +8,7 @@ interface LiveTranscriptionProps {
 
 export default function LiveTranscription({ sessionToken }: LiveTranscriptionProps) {
     const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+    const [sonioxActive, setSonioxActive] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string>('');
 
     // State for the streaming text - English
@@ -51,6 +52,12 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         ws.onmessage = (event) => {
             try {
                 const payload = JSON.parse(event.data);
+
+                // Handle server-push status updates
+                if (payload.type === 'status') {
+                    setSonioxActive(payload.soniox_active ?? false);
+                    return;
+                }
 
                 if (payload.tokens && Array.isArray(payload.tokens)) {
                     let newFinalEn = '';
@@ -131,7 +138,8 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                 <div className="flex items-center space-x-2">
                     <span className="text-sm text-slate-400">Status:</span>
                     {connectionState === 'connecting' && <span className="text-yellow-400 font-medium tracking-wide">Connecting...</span>}
-                    {connectionState === 'connected' && <span className="text-emerald-400 font-medium tracking-wide">Live</span>}
+                    {connectionState === 'connected' && sonioxActive && <span className="text-emerald-400 font-medium tracking-wide">● Live</span>}
+                    {connectionState === 'connected' && !sonioxActive && <span className="text-yellow-400 font-medium tracking-wide">● Stand By</span>}
                     {connectionState === 'error' && <span className="text-rose-400 font-medium tracking-wide">Disconnected</span>}
                     {errorMsg && <span className="text-rose-400 text-xs ml-2">({errorMsg})</span>}
                 </div>
