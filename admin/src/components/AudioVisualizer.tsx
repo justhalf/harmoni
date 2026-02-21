@@ -97,39 +97,86 @@ export default function AudioVisualizer({ wsEndpoint }: VisualizerProps) {
     }, [wsEndpoint]);
 
     useEffect(() => {
-        if (!isRendering || !canvasRef.current || !analyserRef.current) return;
+        if (!canvasRef.current) return;
 
         const canvas = canvasRef.current;
         const canvasCtx = canvas.getContext('2d');
         if (!canvasCtx) return;
-
-        const analyser = analyserRef.current;
-        const bufferLength = analyser.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
 
         let animationId: number;
 
         const draw = () => {
             animationId = requestAnimationFrame(draw);
 
-            analyser.getByteFrequencyData(dataArray);
-
-            canvasCtx.fillStyle = 'rgb(17, 24, 39)'; // Tailwind gray-900
+            // Always draw background
+            canvasCtx.fillStyle = 'rgb(17, 24, 39)'; // Tailwind gray-900 (background)
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
-            const barWidth = (canvas.width / bufferLength) * 2.5;
-            let barHeight;
-            let x = 0;
+            // Only draw the frequency data overlay if actively connected
+            if (isRendering && analyserRef.current) {
+                const analyser = analyserRef.current;
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
 
-            for (let i = 0; i < bufferLength; i++) {
-                barHeight = dataArray[i];
+                analyser.getByteFrequencyData(dataArray);
 
-                // Gradient color trick
-                canvasCtx.fillStyle = `rgb(${barHeight + 100}, 50, 250)`;
-                canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight / 2);
+                // Draw Frequency Line Graph
+                canvasCtx.lineWidth = 2;
+                canvasCtx.strokeStyle = 'rgb(110, 231, 183)'; // Tailwind emerald-300
+                canvasCtx.beginPath();
 
-                x += barWidth + 1;
+                const sliceWidth = canvas.width / bufferLength;
+                let x = 0;
+
+                for (let i = 0; i < bufferLength; i++) {
+                    const v = dataArray[i] / 255.0;
+                    // Leave bottom 30px for labels
+                    const plotHeight = canvas.height - 30;
+                    const y = plotHeight - (v * plotHeight);
+
+                    if (i === 0) {
+                        canvasCtx.moveTo(x, y);
+                    } else {
+                        canvasCtx.lineTo(x, y);
+                    }
+
+                    x += sliceWidth;
+                }
+
+                canvasCtx.stroke();
             }
+
+            // Always Draw X-Axis and Labels
+            canvasCtx.strokeStyle = 'rgb(75, 85, 99)'; // Tailwind gray-600
+            canvasCtx.fillStyle = 'rgb(156, 163, 175)'; // Tailwind gray-400
+            canvasCtx.font = '10px Roboto, sans-serif';
+            canvasCtx.textAlign = 'center';
+            canvasCtx.beginPath();
+
+            const xAxisY = canvas.height - 30;
+            canvasCtx.moveTo(0, xAxisY);
+            canvasCtx.lineTo(canvas.width, xAxisY);
+            canvasCtx.stroke();
+
+            // Web Audio API sampleRate is 16000, Nyquist is 8000
+            const nyquist = 8000;
+            // Draw labels for 0, 1k, 2k, 4k, 8k
+            const labelFreqs = [0, 1000, 2000, 4000, 8000];
+
+            labelFreqs.forEach(freq => {
+                const xPos = (freq / nyquist) * canvas.width;
+
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(xPos, xAxisY);
+                canvasCtx.lineTo(xPos, xAxisY + 5);
+                canvasCtx.stroke();
+
+                const labelText = freq >= 1000 ? `${freq / 1000}k` : `${freq}`;
+                let finalX = xPos;
+                if (freq === 8000) finalX = xPos - 10;
+                if (freq === 0) finalX = xPos + 4;
+                canvasCtx.fillText(labelText, finalX, xAxisY + 20);
+            });
         };
 
         draw();
@@ -167,7 +214,7 @@ export default function AudioVisualizer({ wsEndpoint }: VisualizerProps) {
                     ref={canvasRef}
                     width="800"
                     height="200"
-                    className="w-full h-full object-cover opacity-90 mix-blend-screen"
+                    className="w-full h-full opacity-90 mix-blend-screen"
                 ></canvas>
             </div>
         </div>
