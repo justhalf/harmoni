@@ -2,9 +2,8 @@ import React, { useState, useEffect } from 'react';
 import AudioVisualizer from './components/AudioVisualizer';
 import LiveTranscription from './components/LiveTranscription';
 
-const API_ENDPOINT = 'http://localhost:8000/api/admin/token';
-const WS_ADMIN_AUDIO = 'ws://localhost:8000/ws/admin/audio'; // Connects to Queue B
-const HEALTH_ENDPOINT = 'http://localhost:8000/health';
+const API_ENDPOINT = '/api/admin/token';
+const HEALTH_ENDPOINT = '/health';
 
 const WORD_BANK_NOUNS = ['ocean', 'coffee', 'mountain', 'river', 'sky', 'forest', 'island'];
 const WORD_BANK_ADJ = ['blue', 'morning', 'quiet', 'swift', 'deep', 'cool', 'bright'];
@@ -14,6 +13,7 @@ export default function AdminApp() {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
 
     const [stats, setStats] = useState({ online: false, clients: 0, admins: 0, active: false });
+    const [serverReachable, setServerReachable] = useState(false);
 
     const [draftToken, setDraftToken] = useState('');
     const [activeToken, setActiveToken] = useState('');
@@ -31,7 +31,7 @@ export default function AdminApp() {
 
     const fetchAdminToken = async () => {
         try {
-            const res = await fetch('http://localhost:8000/api/admin/token', {
+            const res = await fetch('/api/admin/token', {
                 headers: { 'Authorization': `Bearer ${adminPassword}` }
             });
             if (res.ok) {
@@ -52,9 +52,11 @@ export default function AdminApp() {
             if (!res.ok) throw new Error("Server offline");
             const data = await res.json();
             setStats({ online: data.soniox_connected, clients: data.active_clients, admins: data.active_admins || 0, active: data.soniox_active });
+            setServerReachable(true);
         } catch (e) {
             // Silently handle expected network failures when the server is down
             setStats({ online: false, clients: 0, admins: 0, active: false });
+            setServerReachable(false);
         }
     };
 
@@ -63,7 +65,7 @@ export default function AdminApp() {
         // Optimistic UI update
         setStats(prev => ({ ...prev, active: newActiveState }));
         try {
-            await fetch('http://localhost:8000/api/admin/soniox/toggle', {
+            await fetch('/api/admin/soniox/toggle', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -124,12 +126,12 @@ export default function AdminApp() {
                             </svg>
                         </div>
                     </div>
-                    <h2 className="text-white text-2xl font-semibold mb-8 text-center tracking-tight">System Admin</h2>
+                    <h2 className="text-white text-2xl font-semibold mb-8 text-center tracking-tight">GPBB Harmoni Admin</h2>
                     <input
                         type="password"
                         value={adminPassword}
                         onChange={(e) => setAdminPassword(e.target.value)}
-                        placeholder="Enter Master Password"
+                        placeholder="Enter Admin Password"
                         className="w-full p-3 mb-6 bg-slate-900/50 text-white border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500 transition-all"
                     />
                     <button className="w-full bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-400 hover:to-blue-500 text-white font-medium py-3 rounded-xl shadow-lg shadow-indigo-500/20 transition-all transform hover:scale-[1.02]">
@@ -151,7 +153,7 @@ export default function AdminApp() {
                         </svg>
                     </div>
                     <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
-                        Broadcast Control Center
+                        GPBB Harmoni Admin Dashboard
                     </h1>
                 </div>
 
@@ -165,7 +167,8 @@ export default function AdminApp() {
                             <span className="text-xs font-semibold text-slate-500 w-6 text-right">{stats.active ? 'ON' : 'OFF'}</span>
                             <button
                                 onClick={toggleSoniox}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${stats.active ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-slate-600 hover:bg-slate-500'}`}
+                                disabled={!serverReachable}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${stats.active ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-slate-600 hover:bg-slate-500'}`}
                             >
                                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${stats.active ? 'translate-x-6' : 'translate-x-1'}`} />
                             </button>
@@ -201,7 +204,7 @@ export default function AdminApp() {
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
-                            Refresh Telemetry
+                            Refresh Status
                         </button>
                     </div>
                 </div>
@@ -211,7 +214,7 @@ export default function AdminApp() {
                     <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
                         <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Session Token Manager</h3>
                         <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-2xl">
-                            This token securely gates the public broadcast. Listeners must enter this token to receive the translated audio streams. Generating a new token locks out legacy connections.
+                            This token securely gates the public broadcast. Clients must enter this token to receive the translated audio streams. Generating a new token will disconnect all existing connections.
                         </p>
 
                         <div className="flex flex-col gap-4">
@@ -219,18 +222,21 @@ export default function AdminApp() {
                                 type="text"
                                 value={draftToken}
                                 onChange={(e) => setDraftToken(e.target.value)}
-                                className="w-full bg-slate-900/50 border border-slate-700/50 p-4 rounded-xl text-xl text-center tracking-widest text-emerald-400 font-mono shadow-inner focus:outline-none focus:border-indigo-500 transition-colors"
+                                disabled={!serverReachable}
+                                className={`w-full bg-slate-900/50 border border-slate-700/50 p-4 rounded-xl text-xl text-center tracking-widest text-emerald-400 font-mono shadow-inner focus:outline-none focus:border-indigo-500 transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
                             />
                             <div className="flex gap-4 w-full">
                                 <button
                                     onClick={generateRandomToken}
-                                    className="px-6 py-3 flex-1 bg-slate-700/50 hover:bg-slate-600 border border-slate-600/50 rounded-xl font-medium transition-colors text-slate-200"
+                                    disabled={!serverReachable}
+                                    className={`px-6 py-3 flex-1 bg-slate-700/50 ${serverReachable ? 'hover:bg-slate-600' : ''} border border-slate-600/50 rounded-xl font-medium transition-colors text-slate-200 ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
                                     Generate Token
                                 </button>
                                 <button
                                     onClick={saveToken}
-                                    className={`px-8 py-3 flex-1 rounded-xl font-medium transition-all shadow-lg min-w-[140px] border border-transparent ${saveStatus === 'idle' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 shadow-indigo-500/25 text-white' :
+                                    disabled={!serverReachable}
+                                    className={`px-8 py-3 flex-1 rounded-xl font-medium transition-all shadow-lg min-w-[140px] border border-transparent ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${saveStatus === 'idle' ? (serverReachable ? 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-600') + ' shadow-indigo-500/25 text-white' :
                                         saveStatus === 'saving' ? 'bg-indigo-500 text-white animate-pulse' :
                                             saveStatus === 'saved' ? 'bg-emerald-500 text-white shadow-emerald-500/25 border-emerald-400' :
                                                 'bg-rose-500 text-white shadow-rose-500/25 border-rose-400'
@@ -243,7 +249,16 @@ export default function AdminApp() {
                                 </button>
                             </div>
                             <div className="text-center text-sm font-medium text-slate-400 mt-2">
-                                Current token: <span className="text-indigo-400 italic font-mono px-2">{activeToken || 'Initializing...'}</span>
+                                Current token: {activeToken ? (
+                                    <span className="text-indigo-400 italic font-mono px-2">{activeToken}</span>
+                                ) : (
+                                    <span className="relative group cursor-default text-slate-500 italic font-mono px-2">
+                                        Initializing...
+                                        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-700 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                            Cannot fetch token. The server may be offline.
+                                        </span>
+                                    </span>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -256,7 +271,7 @@ export default function AdminApp() {
                                 <p className="text-sm text-slate-400 mt-1">Real-time PCM visualization from zero-latency Queue B</p>
                             </div>
                         </div>
-                        <AudioVisualizer wsEndpoint={WS_ADMIN_AUDIO} adminPassword={adminPassword} />
+                        <AudioVisualizer wsEndpoint={`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/admin/audio`} adminPassword={adminPassword} />
                     </div>
                 </div>
 

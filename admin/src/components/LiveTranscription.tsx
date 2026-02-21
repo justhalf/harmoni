@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 
-const WS_ENDPOINT = 'ws://localhost:8000/ws/listen';
 
 interface LiveTranscriptionProps {
     sessionToken: string;
@@ -40,7 +39,9 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         if (!sessionToken) return;
 
         setConnectionState('connecting');
-        const ws = new WebSocket(WS_ENDPOINT);
+        const wsHost = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsHost}//${window.location.host}/ws/listen`;
+        const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -138,9 +139,30 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                 <div className="flex items-center space-x-2">
                     <span className="text-sm text-slate-400">Status:</span>
                     {connectionState === 'connecting' && <span className="text-yellow-400 font-medium tracking-wide">Connecting...</span>}
-                    {connectionState === 'connected' && sonioxActive && <span className="text-emerald-400 font-medium tracking-wide">● Live</span>}
-                    {connectionState === 'connected' && !sonioxActive && <span className="text-yellow-400 font-medium tracking-wide">● Stand By</span>}
-                    {connectionState === 'error' && <span className="text-rose-400 font-medium tracking-wide">Disconnected</span>}
+                    {connectionState === 'connected' && sonioxActive && (
+                        <span className="relative group cursor-default text-emerald-400 font-medium tracking-wide">
+                            ● Live
+                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-700 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                Translation streaming is live.
+                            </span>
+                        </span>
+                    )}
+                    {connectionState === 'connected' && !sonioxActive && (
+                        <span className="relative group cursor-default text-yellow-400 font-medium tracking-wide">
+                            ● Stand By
+                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-700 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                Wait for translation streaming to be activated.
+                            </span>
+                        </span>
+                    )}
+                    {(connectionState === 'idle' || connectionState === 'error') && (
+                        <span className="relative group cursor-default text-rose-400 font-medium tracking-wide">
+                            Offline
+                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-700 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                The server is not running. Check back later!
+                            </span>
+                        </span>
+                    )}
                     {errorMsg && <span className="text-rose-400 text-xs ml-2">({errorMsg})</span>}
                 </div>
             </div>

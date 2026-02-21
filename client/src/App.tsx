@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import TokenPrompt from './components/TokenPrompt';
 
 // Replace with wss://example.com/ws/listen in production
-const WS_ENDPOINT = 'ws://localhost:8000/ws/listen';
+
 
 export default function App() {
     const [sessionToken, setSessionToken] = useState<string | null>(null);
@@ -40,7 +40,9 @@ export default function App() {
         if (!sessionToken) return;
 
         setConnectionState('connecting');
-        const ws = new WebSocket(WS_ENDPOINT);
+        const wsHost = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsHost}//${window.location.host}/ws/listen`;
+        const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -123,7 +125,7 @@ export default function App() {
         setIsValidating(true);
         setErrorMsg('');
         try {
-            const res = await fetch('http://localhost:8000/api/verify-token', {
+            const res = await fetch('/api/verify-token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ token })
@@ -158,24 +160,35 @@ export default function App() {
                 <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-lg shadow">
                     <div className="flex items-center space-x-4">
                         <h1 className="text-xl font-bold text-gray-800">GPBB Harmoni Translation</h1>
-                        <button
-                            onClick={() => {
-                                setFinalTextEn('');
-                                setDraftTextEn('');
-                                setFinalTextId('');
-                                setDraftTextId('');
-                            }}
-                            className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded text-sm font-medium transition-colors"
-                        >
-                            Clear Text
-                        </button>
+
                     </div>
                     <div className="flex items-center space-x-2">
                         <span className="text-sm text-gray-500">Status:</span>
                         {connectionState === 'connecting' && <span className="text-yellow-500 font-medium">Connecting...</span>}
-                        {connectionState === 'connected' && sonioxActive && <span className="text-green-500 font-medium">● Live</span>}
-                        {connectionState === 'connected' && !sonioxActive && <span className="text-yellow-500 font-medium">● Stand By</span>}
-                        {connectionState === 'error' && <span className="text-red-500 font-medium">Disconnected</span>}
+                        {connectionState === 'connected' && sonioxActive && (
+                            <span className="relative group cursor-default text-green-500 font-medium">
+                                ● Live
+                                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                    Translation streaming is live.
+                                </span>
+                            </span>
+                        )}
+                        {connectionState === 'connected' && !sonioxActive && (
+                            <span className="relative group cursor-default text-yellow-500 font-medium">
+                                ● Stand By
+                                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                    Wait for translation streaming to be activated.
+                                </span>
+                            </span>
+                        )}
+                        {connectionState === 'error' && (
+                            <span className="relative group cursor-default text-red-500 font-medium">
+                                Offline
+                                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                    The server is not running. Check back later!
+                                </span>
+                            </span>
+                        )}
                     </div>
                 </div>
 

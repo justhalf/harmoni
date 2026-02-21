@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface TokenPromptProps {
     onTokenSubmit: (token: string) => void;
@@ -8,6 +8,21 @@ interface TokenPromptProps {
 
 export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }: TokenPromptProps) {
     const [inputVal, setInputVal] = useState('');
+    const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+
+    useEffect(() => {
+        const checkServer = async () => {
+            try {
+                const res = await fetch('/health');
+                setServerStatus(res.ok ? 'online' : 'offline');
+            } catch {
+                setServerStatus('offline');
+            }
+        };
+        checkServer();
+        const interval = setInterval(checkServer, 5000);
+        return () => clearInterval(interval);
+    }, []);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -19,9 +34,31 @@ export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }:
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col justify-center items-center p-4">
             <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8">
-                <h2 className="text-2xl font-bold text-center text-gray-900 mb-6">
+                <h2 className="text-2xl font-bold text-center text-gray-900 mb-2">
                     Live Translation Session
                 </h2>
+
+                <div className="flex justify-center mb-6">
+                    {serverStatus === 'checking' && (
+                        <span className="text-sm text-gray-400 font-medium">Checking server...</span>
+                    )}
+                    {serverStatus === 'online' && (
+                        <span className="relative group cursor-default text-sm text-green-500 font-medium">
+                            ● Server Online
+                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                The server is running. Enter your token to connect.
+                            </span>
+                        </span>
+                    )}
+                    {serverStatus === 'offline' && (
+                        <span className="relative group cursor-default text-sm text-red-500 font-medium">
+                            ● Server Offline
+                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                                The server is not running. Check back later!
+                            </span>
+                        </span>
+                    )}
+                </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
@@ -33,7 +70,8 @@ export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }:
                             type="text"
                             value={inputVal}
                             onChange={(e) => setInputVal(e.target.value)}
-                            className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black"
+                            disabled={serverStatus !== 'online'}
+                            className={`w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black ${serverStatus !== 'online' ? 'opacity-50 cursor-not-allowed bg-gray-100' : ''}`}
                             placeholder="e.g. blue-ocean-42"
                             required
                         />
@@ -47,8 +85,8 @@ export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }:
 
                     <button
                         type="submit"
-                        disabled={isLoading}
-                        className={`w-full text-white py-2 px-4 rounded-md transition duration-150 font-medium ${isLoading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                        disabled={isLoading || serverStatus !== 'online'}
+                        className={`w-full text-white py-2 px-4 rounded-md transition duration-150 font-medium ${(isLoading || serverStatus !== 'online') ? 'bg-blue-400 cursor-not-allowed opacity-50' : 'bg-blue-600 hover:bg-blue-700'}`}
                     >
                         {isLoading ? 'Verifying...' : 'Connect to Stream'}
                     </button>

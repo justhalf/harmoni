@@ -23,9 +23,15 @@ console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(formatter)
 logging.basicConfig(level=logging.WARNING, handlers=[console_handler])
 
-for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+for logger_name in ("uvicorn.access",):
     uv_logger = logging.getLogger(logger_name)
     uv_logger.setLevel(logging.WARNING)
+    for handler in uv_logger.handlers:
+        handler.setFormatter(formatter)
+
+for logger_name in ("uvicorn", "uvicorn.error"):
+    uv_logger = logging.getLogger(logger_name)
+    uv_logger.setLevel(logging.INFO)
     for handler in uv_logger.handlers:
         handler.setFormatter(formatter)
 
@@ -55,7 +61,8 @@ async def audio_viz_broadcaster_task(audio_queue_b: asyncio.Queue, manager: Conn
                 await manager.broadcast_audio(chunk)
         except asyncio.CancelledError:
             break
-        except Exception:
+        except Exception as e:
+            logger.error(f"Broadcaster task error: {e}")
             break
 
 @app.on_event("startup")
