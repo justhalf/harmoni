@@ -110,6 +110,12 @@ export default function AudioVisualizer({ wsEndpoint, adminPassword }: Visualize
         const draw = () => {
             animationId = requestAnimationFrame(draw);
 
+            // Sync internal canvas resolution to CSS element size to prevent squishing
+            if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+                canvas.width = canvas.clientWidth;
+                canvas.height = canvas.clientHeight;
+            }
+
             // Always draw background
             canvasCtx.fillStyle = 'rgb(17, 24, 39)'; // Tailwind gray-900 (background)
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
@@ -214,8 +220,6 @@ export default function AudioVisualizer({ wsEndpoint, adminPassword }: Visualize
             <div className="relative w-full h-48 bg-slate-900/50">
                 <canvas
                     ref={canvasRef}
-                    width="800"
-                    height="200"
                     className="w-full h-full opacity-90 mix-blend-screen"
                 ></canvas>
             </div>

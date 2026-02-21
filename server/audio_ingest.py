@@ -2,6 +2,9 @@ import asyncio
 import pyaudio
 import time
 from models import ActiveSession
+import logging
+
+logger = logging.getLogger("harmoni")
 
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
@@ -21,7 +24,7 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
                     input=True,
                     frames_per_buffer=CHUNK)
                     
-    print("Audio Ingest Stream Started.")
+    logger.info("Audio Ingest Stream Started.")
     
     try:
         while True:
@@ -59,7 +62,9 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
             await asyncio.sleep(0.001)
             
     except asyncio.CancelledError:
-        print("Audio Ingest Task Cancelled.")
+        logger.info("Audio Ingest Task Cancelled.")
+    except Exception as e:
+        logger.error(f"Unexpected error in audio_ingest: {e}")
     finally:
         stream.stop_stream()
         stream.close()

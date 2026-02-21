@@ -19,13 +19,18 @@ date_format = "%Y-%m-%d %H:%M:%S"
 formatter = DefaultFormatter(log_format, datefmt=date_format, use_colors=True)
 
 # Set base root logger
-logging.basicConfig(level=logging.WARNING, format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s", datefmt=date_format)
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+logging.basicConfig(level=logging.WARNING, handlers=[console_handler])
 
 for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
-    logger = logging.getLogger(logger_name)
-    logger.setLevel(logging.WARNING)
-    for handler in logger.handlers:
+    uv_logger = logging.getLogger(logger_name)
+    uv_logger.setLevel(logging.WARNING)
+    for handler in uv_logger.handlers:
         handler.setFormatter(formatter)
+
+logger = logging.getLogger("harmoni")
+logger.setLevel(logging.INFO)
 
 app = FastAPI(title="Soniox Translation Broadcast Hub")
 
@@ -41,6 +46,19 @@ manager = ConnectionManager()
 session_state = ActiveSession()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "secret123")
 
+async def audio_viz_broadcaster_task(audio_queue_b: asyncio.Queue, manager: ConnectionManager):
+    """Pulls binary PCM data from Queue B and broadcasts to all connected Admin visualizers."""
+    while True:
+        try:
+            chunk = await audio_queue_b.get()
+            if manager.admin_viz_connections:
+                await manager.broadcast_audio(chunk)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Broadcaster task error: {e}")
+            break
+
 @app.on_event("startup")
 async def startup_event():
     # Start the async audio and soniox tasks in the background
@@ -50,6 +68,11 @@ async def startup_event():
     app.state.audio_ingest_task = asyncio.create_task(
         audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
     )
+    
+    app.state.audio_viz_task = asyncio.create_task(
+        audio_viz_broadcaster_task(app.state.audio_queue_b, manager)
+    )
+    
     # The soniox_task is now triggered manually via the Admin Dashboard
     app.state.soniox_task = None
 
@@ -57,6 +80,8 @@ async def startup_event():
 async def shutdown_event():
     if getattr(app.state, "audio_ingest_task", None):
         app.state.audio_ingest_task.cancel()
+    if getattr(app.state, "audio_viz_task", None):
+        app.state.audio_viz_task.cancel()
     if getattr(app.state, "soniox_task", None):
         app.state.soniox_task.cancel()
 
@@ -110,7 +135,8 @@ async def get_health():
         "audio_live": audio_is_live,
         "soniox_connected": session_state.soniox_connected,
         "soniox_active": session_state.soniox_active,
-        "active_clients": len(manager.active_connections)
+        "active_clients": len(manager.active_connections),
+        "active_admins": len(manager.admin_connections)
     }
 
 # --- Admin API Endpoints ---
@@ -180,37 +206,10 @@ async def admin_audio_viz(websocket: WebSocket):
     if not authorization or authorization != ADMIN_PASSWORD:
         await websocket.close(code=1008)
         return
-    
-    # Retrieve the active Queue B created during startup
-    audio_queue_b = websocket.app.state.audio_queue_b
-    
-    # Flush existing old audio so visualization starts instantly with live audio
-    while not audio_queue_b.empty():
-        try:
-            audio_queue_b.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-            
+    await manager.connect_viz(websocket)
     try:
-        async def send_audio():
-            while True:
-                # Wait for the next chunk of PCM audio from the ingest task
-                chunk = await audio_queue_b.get()
-                
-                # Send the raw binary chunk to the React AudioVisualizer
-                await websocket.send_bytes(chunk)
-                
-                # Yield to event loop
-                await asyncio.sleep(0.001)
-                
-        async def keep_alive():
-            while True:
-                # Need to continually read from the websocket to detect
-                # client disconnects and trigger the except block
-                await websocket.receive_text()
-                
-        await asyncio.gather(send_audio(), keep_alive())
+        while True:
+            # Continually read to detect client disconnects
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        # Admin closed the dashboard tab
-        print("Admin Visualizer Disconnected.")
-        pass
+        manager.disconnect_viz(websocket)

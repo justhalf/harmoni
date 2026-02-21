@@ -13,7 +13,7 @@ export default function AdminApp() {
     const [adminPassword, setAdminPassword] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-    const [stats, setStats] = useState({ online: false, clients: 0, active: false });
+    const [stats, setStats] = useState({ online: false, clients: 0, admins: 0, active: false });
 
     const [draftToken, setDraftToken] = useState('');
     const [activeToken, setActiveToken] = useState('');
@@ -51,10 +51,10 @@ export default function AdminApp() {
             const res = await fetch(HEALTH_ENDPOINT).catch(() => new Response(JSON.stringify({ soniox_connected: false, active_clients: 0, soniox_active: false }), { status: 503 }));
             if (!res.ok) throw new Error("Server offline");
             const data = await res.json();
-            setStats({ online: data.soniox_connected, clients: data.active_clients, active: data.soniox_active });
+            setStats({ online: data.soniox_connected, clients: data.active_clients, admins: data.active_admins || 0, active: data.soniox_active });
         } catch (e) {
             // Silently handle expected network failures when the server is down
-            setStats({ online: false, clients: 0, active: false });
+            setStats({ online: false, clients: 0, admins: 0, active: false });
         }
     };
 
@@ -178,11 +178,21 @@ export default function AdminApp() {
 
                     <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden group">
                         <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                        <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider">Active Listeners</span>
-                        <div className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
-                            {stats.clients}
+                        <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider">Active Connections</span>
+                        <div className="flex w-full items-center justify-between text-center mt-3 z-10">
+                            <div className="flex flex-col flex-1 border-r border-slate-700/50">
+                                <div className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
+                                    {stats.clients}
+                                </div>
+                                <span className="text-xs text-slate-500 font-medium tracking-wide mt-1">Public Listeners</span>
+                            </div>
+                            <div className="flex flex-col flex-1">
+                                <div className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">
+                                    {stats.admins}
+                                </div>
+                                <span className="text-xs text-slate-500 font-medium tracking-wide mt-1">Sys Admins</span>
+                            </div>
                         </div>
-                        <span className="text-xs text-slate-500 mt-3 font-medium">Connected WebSockets</span>
                     </div>
 
                     <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden">

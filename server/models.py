@@ -2,6 +2,9 @@ from pydantic import BaseModel
 from typing import Optional, List, Set, Dict
 from fastapi import WebSocket
 from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger("harmoni")
 
 class TranslationToken(BaseModel):
     """Represents a token mapped from Soniox output."""
@@ -23,22 +26,37 @@ class ConnectionManager:
     """Manages the connected React WebSocket clients."""
     active_connections: Set[WebSocket]
     admin_connections: Set[WebSocket]
+    admin_viz_connections: Set[WebSocket]
 
     def __init__(self):
         self.active_connections = set()
         self.admin_connections = set()
+        self.admin_viz_connections = set()
 
     async def connect(self, websocket: WebSocket, is_admin: bool = False):
         if is_admin:
             self.admin_connections.add(websocket)
+            logger.info(f"Admin Dashboard text stream connected. Total admins: {len(self.admin_connections)}")
         else:
             self.active_connections.add(websocket)
+            logger.info(f"Listener client connected. Total listeners: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket, is_admin: bool = False):
         if is_admin and websocket in self.admin_connections:
             self.admin_connections.remove(websocket)
+            logger.info(f"Admin Dashboard text stream disconnected. Total admins: {len(self.admin_connections)}")
         elif not is_admin and websocket in self.active_connections:
             self.active_connections.remove(websocket)
+            logger.info(f"Listener client disconnected. Total listeners: {len(self.active_connections)}")
+
+    async def connect_viz(self, websocket: WebSocket):
+        self.admin_viz_connections.add(websocket)
+        logger.info(f"Admin Visualizer connected. Total visualizers: {len(self.admin_viz_connections)}")
+
+    def disconnect_viz(self, websocket: WebSocket):
+        if websocket in self.admin_viz_connections:
+            self.admin_viz_connections.remove(websocket)
+            logger.info(f"Admin Visualizer disconnected. Total visualizers: {len(self.admin_viz_connections)}")
 
     async def broadcast(self, message: dict):
         """Fan-out to all connected clients and admins."""
@@ -63,3 +81,15 @@ class ConnectionManager:
             
         for dead in dead_admins:
             self.admin_connections.remove(dead)
+
+    async def broadcast_audio(self, chunk: bytes):
+        """Fan-out binary audio PCM chunk to all admin dashboard visualizers."""
+        dead_viz = set()
+        for connection in self.admin_viz_connections:
+            try:
+                await connection.send_bytes(chunk)
+            except Exception:
+                dead_viz.add(connection)
+                
+        for dead in dead_viz:
+            self.disconnect_viz(dead)
