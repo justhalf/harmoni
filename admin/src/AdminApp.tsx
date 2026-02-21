@@ -28,11 +28,13 @@ export default function AdminApp() {
 
     const fetchStats = async () => {
         try {
-            const res = await fetch(HEALTH_ENDPOINT);
+            const res = await fetch(HEALTH_ENDPOINT).catch(() => new Response(JSON.stringify({ soniox_connected: false, active_clients: 0 }), { status: 503 }));
+            if (!res.ok) throw new Error("Server offline");
             const data = await res.json();
             setStats({ online: data.soniox_connected, clients: data.active_clients });
         } catch (e) {
-            console.error(e);
+            // Silently handle expected network failures when the server is down
+            setStats({ online: false, clients: 0 });
         }
     };
 
@@ -69,88 +71,122 @@ export default function AdminApp() {
 
     if (!isAuthenticated) {
         return (
-            <div className="flex h-screen items-center justify-center bg-gray-900">
-                <form onSubmit={handleLogin} className="bg-gray-800 p-8 rounded shadow-lg max-w-sm w-full">
-                    <h2 className="text-white text-xl mb-4 text-center">Admin Login</h2>
+            <div className="flex h-screen items-center justify-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-900 to-black font-sans">
+                <form onSubmit={handleLogin} className="bg-slate-800/50 backdrop-blur-xl p-10 rounded-2xl shadow-2xl border border-slate-700/50 max-w-sm w-full mx-4">
+                    <div className="flex justify-center mb-6">
+                        <div className="p-3 bg-indigo-500/20 rounded-xl">
+                            <svg className="w-8 h-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                        </div>
+                    </div>
+                    <h2 className="text-white text-2xl font-semibold mb-8 text-center tracking-tight">System Admin</h2>
                     <input
                         type="password"
                         value={adminPassword}
                         onChange={(e) => setAdminPassword(e.target.value)}
-                        placeholder="Enter Admin Password"
-                        className="w-full p-2 mb-4 bg-gray-700 text-white border-none rounded"
+                        placeholder="Enter Master Password"
+                        className="w-full p-3 mb-6 bg-slate-900/50 text-white border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500 transition-all"
                     />
-                    <button className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded">Login</button>
+                    <button className="w-full bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-400 hover:to-blue-500 text-white font-medium py-3 rounded-xl shadow-lg shadow-indigo-500/20 transition-all transform hover:scale-[1.02]">
+                        Authenticate
+                    </button>
                 </form>
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-gray-900 text-gray-100 p-8 font-mono">
-            <div className="max-w-5xl mx-auto space-y-6">
+        <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-900 to-black text-slate-200 p-4 sm:p-8 font-sans">
+            <div className="max-w-5xl mx-auto space-y-8">
+
+                <div className="flex items-center space-x-3 mb-8">
+                    <div className="p-2 bg-indigo-500/20 rounded-lg">
+                        <svg className="w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                    </div>
+                    <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
+                        Broadcast Control Center
+                    </h1>
+                </div>
 
                 {/* Header & Stats Strip */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-gray-800 p-6 rounded-lg shadow border border-gray-700 flex flex-col items-center">
-                        <span className="text-gray-400 text-sm mb-2">Translation Pipeline</span>
-                        <div className={`text-3xl font-bold ${stats.online ? 'text-green-500' : 'text-red-500'}`}>
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden group">
+                        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider">Translation API</span>
+                        <div className={`text-3xl font-bold tracking-tight ${stats.online ? 'text-emerald-400' : 'text-rose-400'}`}>
                             {stats.online ? 'ONLINE' : 'OFFLINE'}
                         </div>
-                        <span className="text-xs text-gray-500 mt-2">Soniox WS Connection</span>
+                        <span className="text-xs text-slate-500 mt-3 font-medium">Soniox WS Connection</span>
                     </div>
 
-                    <div className="bg-gray-800 p-6 rounded-lg shadow border border-gray-700 flex flex-col items-center">
-                        <span className="text-gray-400 text-sm mb-2">Connected Devices</span>
-                        <div className="text-3xl font-bold text-blue-400">
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden group">
+                        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider">Active Listeners</span>
+                        <div className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
                             {stats.clients}
                         </div>
-                        <span className="text-xs text-gray-500 mt-2">Active WebSockets</span>
+                        <span className="text-xs text-slate-500 mt-3 font-medium">Connected WebSockets</span>
                     </div>
 
-                    <div className="bg-gray-800 p-6 rounded-lg shadow border border-gray-700 flex flex-col items-center justify-center">
-                        <span className="text-gray-400 text-sm mb-4">Quick Actions</span>
-                        <button onClick={fetchStats} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition">
-                            Force Refresh Stats
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden">
+                        <span className="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">System Checks</span>
+                        <button type="button" onClick={(e) => { e.preventDefault(); fetchStats(); }} className="w-full py-2.5 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/50 rounded-xl text-sm font-medium text-slate-300 transition-all flex items-center justify-center gap-2 hover:bg-slate-700">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Refresh Telemetry
                         </button>
                     </div>
                 </div>
 
                 {/* Token Management */}
-                <div className="bg-gray-800 p-6 rounded-lg shadow border border-gray-700">
-                    <h3 className="text-lg font-semibold text-gray-300 mb-4 border-b border-gray-700 pb-2">Session Token Manager</h3>
-                    <p className="text-sm text-gray-400 mb-4">
-                        Generates the secret required by listeners to attach to the live broadcast. Updating this immediately locks out old connections.
+                <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
+                    <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Session Token Manager</h3>
+                    <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-2xl">
+                        This token securely gates the public broadcast. Listeners must enter this token to receive the translated audio streams. Generating a new token locks out legacy connections.
                     </p>
 
-                    <div className="flex gap-4">
+                    <div className="flex flex-col sm:flex-row gap-4">
                         <input
                             type="text"
                             value={sessionToken}
                             onChange={(e) => setSessionToken(e.target.value)}
-                            className="flex-1 bg-gray-900 border border-gray-600 p-3 rounded text-xl text-center tracking-widest text-green-400"
+                            className="flex-1 bg-slate-900/50 border border-slate-700/50 p-4 rounded-xl text-xl text-center sm:text-left tracking-widest text-emerald-400 font-mono shadow-inner focus:outline-none focus:border-indigo-500 transition-colors"
                         />
-                        <button
-                            onClick={generateRandomToken}
-                            className="px-6 py-2 bg-purple-600 hover:bg-purple-500 rounded font-medium transition"
-                        >
-                            Auto-Generate
-                        </button>
-                        <button
-                            onClick={saveToken}
-                            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium transition"
-                        >
-                            {saveStatus === 'idle' && 'Apply & Lock'}
-                            {saveStatus === 'saving' && 'Saving...'}
-                            {saveStatus === 'saved' && 'Applied!'}
-                            {saveStatus === 'error' && 'Failed'}
-                        </button>
+                        <div className="flex gap-4">
+                            <button
+                                onClick={generateRandomToken}
+                                className="px-6 py-3 bg-slate-700/50 hover:bg-slate-600 border border-slate-600/50 rounded-xl font-medium transition-colors text-slate-200"
+                            >
+                                Roll Token
+                            </button>
+                            <button
+                                onClick={saveToken}
+                                className={`px-8 py-3 rounded-xl font-medium transition-all shadow-lg min-w-[140px] border border-transparent ${saveStatus === 'idle' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 shadow-indigo-500/25 text-white' :
+                                    saveStatus === 'saving' ? 'bg-indigo-500 text-white animate-pulse' :
+                                        saveStatus === 'saved' ? 'bg-emerald-500 text-white shadow-emerald-500/25 border-emerald-400' :
+                                            'bg-rose-500 text-white shadow-rose-500/25 border-rose-400'
+                                    }`}
+                            >
+                                {saveStatus === 'idle' && 'Apply Policy'}
+                                {saveStatus === 'saving' && 'Syncing...'}
+                                {saveStatus === 'saved' && 'Enforced!'}
+                                {saveStatus === 'error' && 'Sync Failed'}
+                            </button>
+                        </div>
                     </div>
                 </div>
 
                 {/* Live Audio Ingest Visualizer */}
-                <div className="bg-gray-800 p-6 rounded-lg shadow border border-gray-700">
-                    <div className="flex justify-between items-center border-b border-gray-700 pb-2 mb-4">
-                        <h3 className="text-lg font-semibold text-gray-300">Live Audio Hardware Feed (Zero-Latency Queue B)</h3>
+                <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
+                    <div className="flex justify-between items-center mb-6">
+                        <div>
+                            <h3 className="text-xl font-bold text-white tracking-tight">Audio Ingest Pipeline</h3>
+                            <p className="text-sm text-slate-400 mt-1">Real-time PCM visualization from zero-latency Queue B</p>
+                        </div>
                     </div>
                     <AudioVisualizer wsEndpoint={`${WS_ADMIN_AUDIO}?authorization=${adminPassword}`} />
                 </div>

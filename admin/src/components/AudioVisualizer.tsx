@@ -11,66 +11,88 @@ export default function AudioVisualizer({ wsEndpoint }: VisualizerProps) {
     const [isRendering, setIsRendering] = useState(false);
 
     useEffect(() => {
-        // Scaffold Web Audio API context for raw PCM data stream from Queue B
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-        const analyser = audioCtx.createAnalyser();
+        let ws: WebSocket;
+        let audioCtx: AudioContext;
+        let reconnectTimeout: ReturnType<typeof setTimeout>;
 
-        analyser.fftSize = 256;
-        audioCtxRef.current = audioCtx;
-        analyserRef.current = analyser;
+        const connect = () => {
+            // Scaffold Web Audio API context for raw PCM data stream from Queue B
+            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            const analyser = audioCtx.createAnalyser();
 
-        const ws = new WebSocket(wsEndpoint);
-        ws.binaryType = "arraybuffer";
+            analyser.fftSize = 256;
+            audioCtxRef.current = audioCtx;
+            analyserRef.current = analyser;
 
-        ws.onopen = () => {
-            console.log("Admin Queue B Connected");
-            setIsRendering(true);
+            ws = new WebSocket(wsEndpoint);
+            ws.binaryType = "arraybuffer";
+
+            ws.onopen = () => {
+                console.log("Admin Queue B Connected");
+                setIsRendering(true);
+            };
+
+            let nextStartTime = 0;
+
+            ws.onmessage = (event) => {
+                const ctx = audioCtxRef.current;
+                const activeAnalyser = analyserRef.current;
+                if (!ctx || !activeAnalyser) return;
+
+                // In production, Queue B pipes Int16 raw PCM arrays over the socket.
+                const pcmData = new Int16Array(event.data);
+                const floatData = new Float32Array(pcmData.length);
+
+                // Normalize Int16 to Float32 (-1.0 to 1.0) for Web Audio API
+                for (let i = 0; i < pcmData.length; i++) {
+                    floatData[i] = pcmData[i] / 32768.0;
+                }
+
+                // Create an AudioBuffer and copy the normalized samples
+                const audioBuffer = ctx.createBuffer(1, floatData.length, ctx.sampleRate);
+                audioBuffer.copyToChannel(floatData, 0);
+
+                // Play the buffer securely through the analyser node
+                const source = ctx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(activeAnalyser);
+
+                // Connect to a silent gain node so it processes correctly without recursive feedback or deafening feedback loops
+                const silentNode = ctx.createGain();
+                silentNode.gain.value = 0;
+                activeAnalyser.connect(silentNode);
+                silentNode.connect(ctx.destination);
+
+                // Schedule gapless playback
+                if (nextStartTime < ctx.currentTime) {
+                    nextStartTime = ctx.currentTime;
+                }
+                source.start(nextStartTime);
+                nextStartTime += audioBuffer.duration;
+            };
+
+            ws.onclose = () => {
+                setIsRendering(false);
+                // Auto-reconnect every 2 seconds if the server drops or is offline
+                reconnectTimeout = setTimeout(connect, 2000);
+            };
+
+            ws.onerror = () => {
+                // Silently drop connection errors (expected when server is down)
+                ws.close(); // Force the close handler to trigger reconnect
+            };
         };
 
-        let nextStartTime = 0;
-
-        ws.onmessage = (event) => {
-            const ctx = audioCtxRef.current;
-            const analyser = analyserRef.current;
-            if (!ctx || !analyser) return;
-
-            // In production, Queue B pipes Int16 raw PCM arrays over the socket.
-            const pcmData = new Int16Array(event.data);
-            const floatData = new Float32Array(pcmData.length);
-
-            // Normalize Int16 to Float32 (-1.0 to 1.0) for Web Audio API
-            for (let i = 0; i < pcmData.length; i++) {
-                floatData[i] = pcmData[i] / 32768.0;
-            }
-
-            // Create an AudioBuffer and copy the normalized samples
-            const audioBuffer = ctx.createBuffer(1, floatData.length, ctx.sampleRate);
-            audioBuffer.copyToChannel(floatData, 0);
-
-            // Play the buffer securely through the analyser node
-            const source = ctx.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(analyser);
-
-            // Connect to a silent gain node so it processes correctly without recursive feedback or deafening feedback loops
-            const silentNode = ctx.createGain();
-            silentNode.gain.value = 0;
-            analyser.connect(silentNode);
-            silentNode.connect(ctx.destination);
-
-            // Schedule gapless playback
-            if (nextStartTime < ctx.currentTime) {
-                nextStartTime = ctx.currentTime;
-            }
-            source.start(nextStartTime);
-            nextStartTime += audioBuffer.duration;
-        };
-
-        ws.onclose = () => setIsRendering(false);
+        connect();
 
         return () => {
-            ws.close();
-            audioCtx.close();
+            clearTimeout(reconnectTimeout);
+            if (ws) {
+                // Prevent onclose reconnect triggers when React intentionally unmounts it
+                ws.onclose = null;
+                ws.close();
+            }
+            if (audioCtx) audioCtx.close();
         };
     }, [wsEndpoint]);
 
@@ -118,17 +140,36 @@ export default function AudioVisualizer({ wsEndpoint }: VisualizerProps) {
     }, [isRendering]);
 
     return (
-        <div className="w-full bg-gray-900 rounded border border-gray-700 overflow-hidden flex flex-col">
-            <div className="px-4 py-2 bg-gray-800 border-b border-gray-700 flex justify-between items-center text-xs text-gray-400">
-                <span>Web Audio API (AnalyserNode)</span>
-                <span>{isRendering ? 'Receiving PCM...' : 'Awaiting Data...'}</span>
+        <div className="w-full bg-slate-800/50 backdrop-blur-md rounded-xl border border-slate-700/50 overflow-hidden flex flex-col shadow-2xl">
+            <div className="px-6 py-3 bg-slate-800/80 border-b border-slate-700/50 flex justify-between items-center text-xs font-medium text-slate-400">
+                <span className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
+                    Web Audio API (AnalyserNode)
+                </span>
+                <span>
+                    {isRendering ? (
+                        <div className="flex items-center gap-2">
+                            <span className="relative flex h-2.5 w-2.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                            </span>
+                            <span className="text-emerald-400 font-semibold tracking-wider">LIVE</span>
+                        </div>
+                    ) : (
+                        <span className="text-slate-500 italic">Awaiting Data...</span>
+                    )}
+                </span>
             </div>
-            <canvas
-                ref={canvasRef}
-                width="800"
-                height="200"
-                className="w-full h-48 object-cover opacity-80"
-            ></canvas>
+            <div className="relative w-full h-48 bg-slate-900/50">
+                <canvas
+                    ref={canvasRef}
+                    width="800"
+                    height="200"
+                    className="w-full h-full object-cover opacity-90 mix-blend-screen"
+                ></canvas>
+            </div>
         </div>
     );
 }

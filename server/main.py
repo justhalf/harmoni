@@ -108,15 +108,24 @@ async def admin_audio_viz(websocket: WebSocket, authorization: str = None):
             break
             
     try:
-        while True:
-            # Wait for the next chunk of PCM audio from the ingest task
-            chunk = await audio_queue_b.get()
-            
-            # Send the raw binary chunk to the React AudioVisualizer
-            await websocket.send_bytes(chunk)
-            
-            # Optional: Small yield to event loop to prevent blocking if queue is massive
-            await asyncio.sleep(0.001)
+        async def send_audio():
+            while True:
+                # Wait for the next chunk of PCM audio from the ingest task
+                chunk = await audio_queue_b.get()
+                
+                # Send the raw binary chunk to the React AudioVisualizer
+                await websocket.send_bytes(chunk)
+                
+                # Yield to event loop
+                await asyncio.sleep(0.001)
+                
+        async def keep_alive():
+            while True:
+                # Need to continually read from the websocket to detect
+                # client disconnects and trigger the except block
+                await websocket.receive_text()
+                
+        await asyncio.gather(send_audio(), keep_alive())
     except WebSocketDisconnect:
         # Admin closed the dashboard tab
         print("Admin Visualizer Disconnected.")
