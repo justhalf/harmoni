@@ -155,7 +155,7 @@ export default function AdminApp() {
 
     if (!isAuthenticated) {
         return (
-            <div className="flex h-screen items-center justify-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-900 to-black font-sans">
+            <div className="flex min-h-[100dvh] items-center justify-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-900 to-black font-sans">
                 <form onSubmit={handleLogin} className="bg-slate-800/50 backdrop-blur-xl p-10 rounded-2xl shadow-2xl border border-slate-700/50 max-w-sm w-full mx-4">
                     <div className="flex justify-center mb-6">
                         <div className="p-3 bg-indigo-500/20 rounded-xl">
@@ -181,7 +181,7 @@ export default function AdminApp() {
     }
 
     return (
-        <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-900 to-black text-slate-200 p-4 sm:p-8 font-sans">
+        <div className="min-h-[100dvh] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-900 to-black text-slate-200 p-4 sm:p-8 font-sans">
             <div className="max-w-5xl mx-auto space-y-8">
 
                 <div className="flex items-center space-x-3 mb-8">
@@ -212,7 +212,7 @@ export default function AdminApp() {
                             </button>
                         </div>
 
-                        <div className={`text-xl font-bold tracking-tight ${stats.online ? 'text-emerald-400' : 'text-slate-500'}`}>
+                        <div className={`text-xl font-bold tracking-tight select-none ${stats.online ? 'text-emerald-400' : 'text-slate-500'}`}>
                             {stats.online ? 'CONNECTED' : 'STANDBY'}
                         </div>
                     </div>

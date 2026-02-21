@@ -220,7 +220,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
             if (event.code === 1008) {
                 setErrorMsg('Invalid session token. You have been disconnected.');
             } else {
-                setErrorMsg('Lost connection. Reconnecting in 3s...');
+                // setErrorMsg('Lost connection. Reconnecting in 3s...');
                 // Auto-reconnect
                 reconnectTimeoutRef.current = window.setTimeout(() => {
                     setReconnectTrigger(prev => prev + 1);
@@ -244,7 +244,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
 
     return (
         <div
-            className={`flex flex-col p-8 rounded-2xl shadow-xl border border-slate-700/50 h-[calc(100vh-1rem)] sm:h-[calc(100vh-2rem)] transition-colors duration-200 ${isDarkMode ? 'bg-slate-900/90 text-slate-100 backdrop-blur-xl' : 'bg-slate-50/90 text-slate-900 border-slate-300 backdrop-blur-xl'}`}
+            className={`flex flex-col p-4 sm:p-8 rounded-2xl shadow-xl border border-slate-700/50 h-[calc(100dvh-1rem)] sm:h-[calc(100dvh-2rem)] transition-colors duration-200 ${isDarkMode ? 'bg-slate-900/90 text-slate-100 backdrop-blur-xl' : 'bg-slate-50/90 text-slate-900 border-slate-300 backdrop-blur-xl'}`}
             onClick={() => setIsDisplayMenuOpen(false)}
         >
             {/* Header Strip */}
@@ -344,26 +344,33 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                     <span className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Status:</span>
                     {connectionState === 'connecting' && <span className="text-yellow-500 font-medium tracking-wide">Connecting...</span>}
                     {connectionState === 'connected' && sonioxActive && (
-                        <span className="relative group cursor-default text-emerald-500 font-medium tracking-wide">
-                            ● Live
-                            <span className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
+                        <span className="relative group cursor-default text-emerald-500 font-medium tracking-wide select-none flex items-center gap-1.5">
+                            <span className="relative flex h-2.5 w-2.5 shrink-0">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                            </span>
+                            <span>Live</span>
+                            <span className={`absolute top-full right-0 mt-3 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50 ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
                                 Translation streaming is live.
+                                <div className={`absolute -top-[5px] right-4 w-2.5 h-2.5 rotate-45 border-t border-l ${isDarkMode ? 'bg-slate-700 border-slate-700' : 'bg-white border-slate-200'}`}></div>
                             </span>
                         </span>
                     )}
                     {connectionState === 'connected' && !sonioxActive && (
-                        <span className="relative group cursor-default text-yellow-500 font-medium tracking-wide">
-                            ● Stand By
-                            <span className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
+                        <span className="relative group cursor-default text-yellow-500 font-medium tracking-wide select-none flex items-center">
+                            <span>● Stand By</span>
+                            <span className={`absolute top-full right-0 mt-3 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50 ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
                                 Wait for translation streaming to be activated.
+                                <div className={`absolute -top-[5px] right-4 w-2.5 h-2.5 rotate-45 border-t border-l ${isDarkMode ? 'bg-slate-700 border-slate-700' : 'bg-white border-slate-200'}`}></div>
                             </span>
                         </span>
                     )}
                     {(connectionState === 'idle' || connectionState === 'error') && (
-                        <span className="relative group cursor-default text-rose-500 font-medium tracking-wide">
-                            Offline
-                            <span className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
+                        <span className="relative group cursor-default text-rose-500 font-medium tracking-wide select-none flex items-center">
+                            <span>Offline</span>
+                            <span className={`absolute top-full right-0 mt-3 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50 ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
                                 The server is not running. Check back later!
+                                <div className={`absolute -top-[5px] right-4 w-2.5 h-2.5 rotate-45 border-t border-l ${isDarkMode ? 'bg-slate-700 border-slate-700' : 'bg-white border-slate-200'}`}></div>
                             </span>
                         </span>
                     )}
@@ -517,21 +524,21 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                 </div>
             )}
 
-            <div className={`sm:hidden shrink-0 mt-4 pt-2 flex justify-around items-center z-40 border-t ${isDarkMode ? 'border-slate-700/50' : 'border-slate-300'}`}>
+            <div className={`sm:hidden shrink-0 mt-1 flex justify-around items-center z-40 border-t ${isDarkMode ? 'border-slate-700/50' : 'border-slate-300'}`}>
                 <button
                     disabled
                     onClick={(e) => { e.stopPropagation(); }}
-                    className={`p-2 flex flex-col items-center justify-center focus:outline-none transition-colors text-slate-400 opacity-50 cursor-not-allowed`}
+                    className={`px-2 py-1 flex flex-col items-center justify-center focus:outline-none transition-colors text-slate-400 opacity-50 cursor-not-allowed`}
                 >
-                    <svg className="w-6 h-6 mb-1" fill="none" viewBox="-2 -2 28 28" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12V9a9 9 0 00-18 0v3m0 0a3 3 0 00-3 3v2a3 3 0 003 3h2a1 1 0 001-1v-6a1 1 0 00-1-1H3m18 0a3 3 0 013 3v2a3 3 0 01-3 3h-2a1 1 0 01-1-1v-6a1 1 0 011-1h2z" /></svg>
-                    <span className="text-xs font-medium">Listen</span>
+                    <svg className="w-5 h-5 mb-0.5" fill="none" viewBox="-2 -2 28 28" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12V9a9 9 0 00-18 0v3m0 0a3 3 0 00-3 3v2a3 3 0 003 3h2a1 1 0 001-1v-6a1 1 0 00-1-1H3m18 0a3 3 0 013 3v2a3 3 0 01-3 3h-2a1 1 0 01-1-1v-6a1 1 0 011-1h2z" /></svg>
+                    <span className="text-[10px] font-medium">Listen</span>
                 </button>
                 <button
                     onClick={(e) => { e.stopPropagation(); setIsDisplayMenuOpen(!isDisplayMenuOpen); }}
-                    className={`p-2 flex flex-col items-center justify-center focus:outline-none transition-colors ${isDisplayMenuOpen ? (isDarkMode ? 'text-indigo-400' : 'text-indigo-600') : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700')}`}
+                    className={`px-2 py-1 flex flex-col items-center justify-center focus:outline-none transition-colors ${isDisplayMenuOpen ? (isDarkMode ? 'text-indigo-400' : 'text-indigo-600') : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700')}`}
                 >
-                    <svg className="w-6 h-6 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                    <span className="text-xs font-medium">Options</span>
+                    <svg className="w-5 h-5 mb-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    <span className="text-[10px] font-medium">Options</span>
                 </button>
                 <button
                     onClick={() => {
@@ -540,10 +547,10 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                         setDraftTextId('');
                         pendingIndRef.current = '';
                     }}
-                    className="p-2 flex flex-col items-center justify-center text-rose-400 hover:text-rose-300 focus:outline-none transition-colors"
+                    className="px-2 py-1 flex flex-col items-center justify-center text-rose-400 hover:text-rose-300 focus:outline-none transition-colors"
                 >
-                    <svg className="w-6 h-6 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                    <span className="text-xs font-medium">Clear</span>
+                    <svg className="w-5 h-5 mb-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    <span className="text-[10px] font-medium">Clear</span>
                 </button>
             </div>
         </div>

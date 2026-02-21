@@ -395,7 +395,7 @@ export default function App() {
                 setErrorMsg('Invalid session token. You have been disconnected.');
                 setSessionToken(null);
             } else {
-                setErrorMsg('Connection to server lost. Reconnecting in 3s...');
+                // setErrorMsg('Connection to server lost. Reconnecting in 3s...');
                 // Auto-reconnect
                 reconnectTimeoutRef.current = window.setTimeout(() => {
                     setReconnectTrigger(prev => prev + 1);
