@@ -19,6 +19,9 @@ export default function AdminApp() {
     const [activeToken, setActiveToken] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
+    const [audioDevices, setAudioDevices] = useState<{ index: number, name: string }[]>([]);
+    const [selectedAudioDevice, setSelectedAudioDevice] = useState<number | ''>('');
+
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
         if (adminPassword.trim() !== "") {
@@ -79,9 +82,44 @@ export default function AdminApp() {
         }
     };
 
+    const fetchAudioDevices = async () => {
+        try {
+            const res = await fetch('/api/admin/audio-devices', {
+                headers: { 'Authorization': `Bearer ${adminPassword}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setAudioDevices(data.devices || []);
+                setSelectedAudioDevice(data.active_device_index !== null ? data.active_device_index : '');
+            }
+        } catch (e) {
+            console.error("Failed to fetch audio devices", e);
+        }
+    };
+
+    const handleAudioDeviceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const value = e.target.value;
+        const newDeviceIndex = value === '' ? null : parseInt(value, 10);
+        setSelectedAudioDevice(value === '' ? '' : parseInt(value, 10));
+
+        try {
+            await fetch('/api/admin/audio-device', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${adminPassword}`
+                },
+                body: JSON.stringify({ device_index: newDeviceIndex })
+            });
+        } catch (e) {
+            console.error("Failed to update audio device", e);
+        }
+    };
+
     useEffect(() => {
         if (!isAuthenticated) return;
         const interval = setInterval(fetchStats, 5000); // Poll health stats
+        fetchAudioDevices();
         return () => clearInterval(interval);
     }, [isAuthenticated]);
 
@@ -265,11 +303,24 @@ export default function AdminApp() {
 
                     {/* Live Audio Ingest Visualizer */}
                     <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
-                        <div className="flex justify-between items-center mb-6">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                             <div>
-                                <h3 className="text-xl font-bold text-white tracking-tight">Audio Ingest Pipeline</h3>
+                                <h3 className="text-xl font-bold text-white tracking-tight">Audio Input</h3>
                                 <p className="text-sm text-slate-400 mt-1">Real-time PCM visualization from zero-latency Queue B</p>
                             </div>
+                            <select
+                                value={selectedAudioDevice}
+                                onChange={handleAudioDeviceChange}
+                                disabled={!serverReachable || audioDevices.length === 0}
+                                className={`bg-slate-900/50 border border-slate-700/50 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none transition-colors max-w-[200px] truncate ${(!serverReachable || audioDevices.length === 0) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                                <option value="">Default System Device</option>
+                                {audioDevices.map(device => (
+                                    <option key={device.index} value={device.index}>
+                                        {device.name}
+                                    </option>
+                                ))}
+                            </select>
                         </div>
                         <AudioVisualizer wsEndpoint={`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/admin/audio`} adminPassword={adminPassword} />
                     </div>

@@ -65,10 +65,16 @@ export default function AudioVisualizer({ wsEndpoint, adminPassword }: Visualize
                 activeAnalyser.connect(silentNode);
                 silentNode.connect(ctx.destination);
 
-                // Schedule gapless playback
+                // Schedule gapless playback, but drop frames if we fall behind too much
+                // This guarantees zero-latency live sync over time instead of building an infinite lag queue 
                 if (nextStartTime < ctx.currentTime) {
                     nextStartTime = ctx.currentTime;
+                } else if (nextStartTime > ctx.currentTime + 0.3) {
+                    // We are rendering extremely far in the future due to a packet wave or lag drop.
+                    // Snap the pointer back to reality to clear the backlog instantly.
+                    nextStartTime = ctx.currentTime + 0.05;
                 }
+
                 source.start(nextStartTime);
                 nextStartTime += audioBuffer.duration;
             };

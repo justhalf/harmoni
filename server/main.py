@@ -1,4 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Header
+import pyaudio
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import time
@@ -69,7 +71,7 @@ async def audio_viz_broadcaster_task(audio_queue_b: asyncio.Queue, manager: Conn
 async def startup_event():
     # Start the async audio and soniox tasks in the background
     app.state.audio_queue_a = asyncio.Queue(maxsize=100) # Soniox Queue
-    app.state.audio_queue_b = asyncio.Queue(maxsize=100) # Admin Viz Queue
+    app.state.audio_queue_b = asyncio.Queue(maxsize=1) # Admin Viz Queue (1 frame = 0 latency backlog)
     
     app.state.audio_ingest_task = asyncio.create_task(
         audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
@@ -84,8 +86,14 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    # Graceful audio ingest shutdown
+    session_state.stop_audio_ingest = True
     if getattr(app.state, "audio_ingest_task", None):
-        app.state.audio_ingest_task.cancel()
+        try:
+            await app.state.audio_ingest_task
+        except Exception:
+            pass
+            
     if getattr(app.state, "audio_viz_task", None):
         app.state.audio_viz_task.cancel()
     if getattr(app.state, "soniox_task", None):
@@ -206,6 +214,121 @@ async def update_token(req: TokenUpdateReq, authorization: str = Header(None)):
     # Gracefully kick all currently connected clients that don't match the new token rules?
     # For now, we leave them connected. The new token only applies to initial auth.
     return {"status": "success", "active_token": session_state.admin_token}
+    
+@app.get("/api/admin/audio-devices")
+async def get_audio_devices(authorization: str = Header(None)):
+    if not authorization or authorization != f"Bearer {ADMIN_PASSWORD}":
+        raise HTTPException(status_code=401, detail="Unauthorized Admin")
+    
+    p = pyaudio.PyAudio()
+    
+    # Get host APIs mapping
+    host_apis = {}
+    for i in range(p.get_host_api_count()):
+        try:
+            api_info = p.get_host_api_info_by_index(i)
+            host_apis[api_info["index"]] = api_info["name"]
+        except:
+            pass
+            
+    # Priority for deduplication: WASAPI > DirectSound > MME. Skip WDM-KS (raw pins).
+    api_scores = {
+        "Windows WASAPI": 2,
+        "Windows DirectSound": 3,
+        "MME": 3,
+        "Windows WDM-KS": -1
+    }
+    
+    unique_devices = {}
+    
+    for i in range(p.get_device_count()):
+        try:
+            dev = p.get_device_info_by_index(i)
+            if dev.get('maxInputChannels', 0) > 0:
+                api_index = dev.get('hostApi')
+                api_name = host_apis.get(api_index, "Unknown")
+                score = api_scores.get(api_name, 0)
+                
+                if score < 0: # Skip WDM-KS entirely
+                    continue
+                    
+                name = dev.get('name')
+                # MME truncates to 31 chars. Use first 31 chars to group identical devices across APIs
+                group_key = name[:31]
+                
+                if group_key not in unique_devices or score > unique_devices[group_key]['score']:
+                    unique_devices[group_key] = {
+                        "index": i,
+                        "name": f"{name} ({api_name})" if api_name != "Unknown" else name,
+                        "channels": dev.get('maxInputChannels'),
+                        "defaultSampleRate": dev.get('defaultSampleRate'),
+                        "score": score
+                    }
+        except Exception as e:
+            logger.warning(f"Error getting info for audio device {i}: {e}")
+            
+    p.terminate()
+    
+    devices = [
+        {
+            "index": d["index"], 
+            "name": d["name"], 
+            "channels": d["channels"], 
+            "defaultSampleRate": d["defaultSampleRate"]
+        } 
+        for d in unique_devices.values()
+    ]
+    devices.sort(key=lambda x: x["index"])
+    
+    return {"devices": devices, "active_device_index": session_state.audio_device_index}
+
+class AudioDeviceUpdateReq(BaseModel):
+    device_index: Optional[int] = None
+
+@app.post("/api/admin/audio-device")
+async def update_audio_device(req: AudioDeviceUpdateReq, authorization: str = Header(None)):
+    if not authorization or authorization != f"Bearer {ADMIN_PASSWORD}":
+        raise HTTPException(status_code=401, detail="Unauthorized Admin")
+    
+    session_state.audio_device_index = req.device_index
+    
+    # Lookup the channel count so we can downmix properly
+    if req.device_index is not None:
+        p = pyaudio.PyAudio()
+        try:
+            info = p.get_device_info_by_index(req.device_index)
+            session_state.audio_device_channels = info.get('maxInputChannels', 1)
+        except:
+            pass
+        p.terminate()
+    else:
+        session_state.audio_device_channels = 1
+    
+    # Restart audio ingest task safely
+    session_state.stop_audio_ingest = True
+    if getattr(app.state, "audio_ingest_task", None):
+        try:
+            # Wait for C-level pyaudio blocking read to finish
+            await app.state.audio_ingest_task
+        except Exception:
+            pass
+            
+    # Reset flag
+    session_state.stop_audio_ingest = False
+    
+    # Empty queues for clean restart
+    while not app.state.audio_queue_a.empty():
+        try: app.state.audio_queue_a.get_nowait()
+        except: pass
+    while not app.state.audio_queue_b.empty():
+        try: app.state.audio_queue_b.get_nowait()
+        except: pass
+        
+    app.state.audio_ingest_task = asyncio.create_task(
+        audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
+    )
+    
+    return {"status": "success", "active_device_index": session_state.audio_device_index}
     
 @app.websocket("/ws/admin/audio")
 async def admin_audio_viz(websocket: WebSocket):

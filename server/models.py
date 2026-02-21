@@ -20,6 +20,9 @@ class ActiveSession(BaseModel):
     audio_last_received_ts: float = 0.0
     soniox_connected: bool = False
     soniox_active: bool = False # Track if admin turned it on
+    audio_device_index: Optional[int] = None
+    audio_device_channels: int = 1
+    stop_audio_ingest: bool = False
     
 @dataclass
 class ConnectionManager:
