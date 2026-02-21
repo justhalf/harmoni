@@ -211,8 +211,9 @@ async def update_token(req: TokenUpdateReq, authorization: str = Header(None)):
     # Update active token
     session_state.admin_token = req.new_token
     
-    # Gracefully kick all currently connected clients that don't match the new token rules?
-    # For now, we leave them connected. The new token only applies to initial auth.
+    # Gracefully kick all currently connected clients that don't match the new token rules
+    await manager.kick_unauthorized()
+    
     return {"status": "success", "active_token": session_state.admin_token}
     
 @app.get("/api/admin/audio-devices")

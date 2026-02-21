@@ -59,6 +59,21 @@ class ConnectionManager:
         if websocket in self.admin_viz_connections:
             self.admin_viz_connections.remove(websocket)
 
+    async def kick_unauthorized(self):
+        """Forcefully disconnect all standard client connections. (Admins are immune)"""
+        dead_connections = set()
+        for connection in self.active_connections:
+            try:
+                # 1008 is the standard WebSocket code for Policy Violation
+                await connection.close(code=1008, reason="Token revoked")
+            except Exception:
+                pass
+            dead_connections.add(connection)
+            
+        for dead in dead_connections:
+            self.active_connections.remove(dead)
+        logger.info(f"Kicked {len(dead_connections)} clients. Active clients: 0")
+
     async def broadcast(self, message: dict):
         """Fan-out to all connected clients and admins."""
         dead_connections = set()

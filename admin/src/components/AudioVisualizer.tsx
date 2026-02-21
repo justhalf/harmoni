@@ -25,6 +25,13 @@ export default function AudioVisualizer({ wsEndpoint, adminPassword }: Visualize
             audioCtxRef.current = audioCtx;
             analyserRef.current = analyser;
 
+            // Connect to a silent gain node so it processes correctly without recursive feedback or deafening feedback loops.
+            // This MUST be done once per session, not per packet.
+            const silentNode = audioCtx.createGain();
+            silentNode.gain.value = 0;
+            analyser.connect(silentNode);
+            silentNode.connect(audioCtx.destination);
+
             ws = new WebSocket(wsEndpoint);
             ws.binaryType = "arraybuffer";
 
@@ -58,12 +65,6 @@ export default function AudioVisualizer({ wsEndpoint, adminPassword }: Visualize
                 const source = ctx.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(activeAnalyser);
-
-                // Connect to a silent gain node so it processes correctly without recursive feedback or deafening feedback loops
-                const silentNode = ctx.createGain();
-                silentNode.gain.value = 0;
-                activeAnalyser.connect(silentNode);
-                silentNode.connect(ctx.destination);
 
                 // Schedule gapless playback, but drop frames if we fall behind too much
                 // This guarantees zero-latency live sync over time instead of building an infinite lag queue 

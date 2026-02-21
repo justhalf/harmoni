@@ -306,7 +306,7 @@ export default function AdminApp() {
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                             <div>
                                 <h3 className="text-xl font-bold text-white tracking-tight">Audio Input</h3>
-                                <p className="text-sm text-slate-400 mt-1">Real-time PCM visualization from zero-latency Queue B</p>
+                                <p className="text-sm text-slate-400 mt-1">Real-time PCM visualization</p>
                             </div>
                             <select
                                 value={selectedAudioDevice}
