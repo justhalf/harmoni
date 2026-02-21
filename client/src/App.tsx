@@ -144,6 +144,16 @@ export default function App() {
             const contentH = el.firstElementChild?.clientHeight || 0;
             const fullness = containerH > 0 ? Math.min(1, contentH / containerH) : 0;
             setTopAlpha(1.0 - (0.7 * fullness));
+
+            // Sync scroller for Indonesian
+            if (scrollRefId.current) {
+                const scrollTop = el.scrollTop;
+                const scrollHeight = el.scrollHeight;
+                const scrollRatio = scrollTop / (scrollHeight - containerH || 1);
+                const idHeight = scrollRefId.current.scrollHeight;
+                const idClient = scrollRefId.current.clientHeight;
+                scrollRefId.current.scrollTop = scrollRatio * (idHeight - idClient);
+            }
         }
 
         if (!activePopover) return;
@@ -393,8 +403,9 @@ export default function App() {
                     {/* Desktop Center Menu Strip */}
                     <div className="hidden sm:flex items-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm mx-4 relative" onClick={(e) => e.stopPropagation()}>
                         <button
+                            disabled
                             onClick={(e) => { e.stopPropagation(); }}
-                            className={`rounded-l-lg px-4 py-2 flex flex-row items-center justify-center transition-colors border-r border-gray-200 dark:border-gray-700 focus:outline-none text-gray-600 dark:text-gray-400 hover:text-gray-900 hover:bg-gray-50 dark:hover:bg-gray-700`}
+                            className={`rounded-l-lg px-4 py-2 flex flex-row items-center justify-center transition-colors border-r border-gray-200 dark:border-gray-700 focus:outline-none text-gray-400 dark:text-gray-500 opacity-50 cursor-not-allowed`}
                         >
                             <svg className="w-5 h-5 mr-1.5" fill="none" viewBox="-2 -2 28 28" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12V9a9 9 0 00-18 0v3m0 0a3 3 0 00-3 3v2a3 3 0 003 3h2a1 1 0 001-1v-6a1 1 0 00-1-1H3m18 0a3 3 0 013 3v2a3 3 0 01-3 3h-2a1 1 0 01-1-1v-6a1 1 0 011-1h2z" /></svg>
                             <span className="text-sm font-medium">Listen</span>
@@ -407,8 +418,9 @@ export default function App() {
                             <span className="text-sm font-medium">Options</span>
                         </button>
                         <button
+                            disabled
                             onClick={(e) => { e.stopPropagation(); }}
-                            className="rounded-r-lg px-4 py-2 flex flex-row items-center justify-center transition-colors text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none"
+                            className="rounded-r-lg px-4 py-2 flex flex-row items-center justify-center transition-colors text-gray-400 dark:text-gray-500 focus:outline-none opacity-50 cursor-not-allowed"
                         >
                             <svg className="w-5 h-5 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                             <span className="text-sm font-medium">You</span>
@@ -507,6 +519,14 @@ export default function App() {
                         <div
                             ref={scrollRefId}
                             className={`flex-1 overflow-y-auto overflow-x-hidden leading-relaxed font-sans relative text-gray-900 dark:text-gray-100 transition-colors duration-200 ${getFontSizeClass()}`}
+                            style={{
+                                WebkitMaskImage: `linear-gradient(to bottom, rgba(0,0,0,${topAlpha.toFixed(2)}) 0%, rgba(0,0,0,1) 30%)`,
+                                maskImage: `linear-gradient(to bottom, rgba(0,0,0,${topAlpha.toFixed(2)}) 0%, rgba(0,0,0,1) 30%)`,
+                                WebkitMaskSize: '100% 100%',
+                                maskSize: '100% 100%',
+                                WebkitMaskRepeat: 'no-repeat',
+                                maskRepeat: 'no-repeat',
+                            }}
                         >
                             {spans.length === 0 && draftTextId === '' ? (
                                 <div className="text-gray-400 dark:text-gray-500 italic mt-4 text-center">
@@ -707,8 +727,9 @@ export default function App() {
                 {/* Mobile Bottom Navigation Bar */}
                 <div className="sm:hidden shrink-0 h-16 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex justify-around items-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-40 transition-colors duration-200 relative">
                     <button
+                        disabled
                         onClick={(e) => { e.stopPropagation(); }}
-                        className={`p-2 flex flex-col items-center justify-center focus:outline-none transition-colors text-gray-500 dark:text-gray-400 hover:text-gray-900`}
+                        className={`p-2 flex flex-col items-center justify-center focus:outline-none transition-colors text-gray-400 dark:text-gray-500 opacity-50 cursor-not-allowed`}
                     >
                         <svg className="w-6 h-6 mb-1" fill="none" viewBox="-2 -2 28 28" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12V9a9 9 0 00-18 0v3m0 0a3 3 0 00-3 3v2a3 3 0 003 3h2a1 1 0 001-1v-6a1 1 0 00-1-1H3m18 0a3 3 0 013 3v2a3 3 0 01-3 3h-2a1 1 0 01-1-1v-6a1 1 0 011-1h2z" /></svg>
                         <span className="text-xs font-medium">Listen</span>
@@ -720,7 +741,7 @@ export default function App() {
                         <svg className="w-6 h-6 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                         <span className="text-xs font-medium">Options</span>
                     </button>
-                    <button className="p-2 flex flex-col items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 focus:outline-none transition-colors">
+                    <button disabled className="p-2 flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 focus:outline-none transition-colors opacity-50 cursor-not-allowed">
                         <svg className="w-6 h-6 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                         <span className="text-xs font-medium">You</span>
                     </button>
