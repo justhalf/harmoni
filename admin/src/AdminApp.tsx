@@ -102,7 +102,7 @@ export default function AdminApp() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${adminPassword}`
+                    'Authorization': `Bearer ${adminSessionToken}`
                 },
                 body: JSON.stringify({ active: newActiveState })
             });
@@ -138,7 +138,7 @@ export default function AdminApp() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${adminPassword}`
+                    'Authorization': `Bearer ${adminSessionToken}`
                 },
                 body: JSON.stringify({ device_index: newDeviceIndex })
             });
@@ -285,54 +285,64 @@ export default function AdminApp() {
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     {/* Passphrase Management */}
-                    <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
-                        <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Passphrase Manager</h3>
-                        <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-2xl">
-                            This passphrase securely gates the public broadcast. Clients must enter this passphrase to receive the translated audio streams. Applying a new passphrase will disconnect all existing connections.
-                        </p>
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col justify-between">
+                        <div>
+                            <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Passphrase Manager</h3>
+                            <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-2xl">
+                                This passphrase securely gates the public broadcast. Clients must enter this passphrase to receive the translated audio streams. Applying a new passphrase will disconnect all existing connections.
+                            </p>
 
-                        <div className="flex flex-col gap-4">
-                            <input
-                                type="text"
-                                value={draftPassphrase}
-                                onChange={(e) => setDraftPassphrase(e.target.value)}
-                                disabled={!serverReachable}
-                                className={`w-full bg-slate-900/50 border border-slate-700/50 p-4 rounded-xl text-xl text-center tracking-widest text-emerald-400 font-mono shadow-inner focus:outline-none focus:border-indigo-500 transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            />
-                            <div className="flex gap-4 w-full">
-                                <button
-                                    onClick={generateRandomPassphrase}
-                                    disabled={!serverReachable}
-                                    className={`px-6 py-3 flex-1 bg-slate-700/50 ${serverReachable ? 'hover:bg-slate-600' : ''} border border-slate-600/50 rounded-xl font-medium transition-colors text-slate-200 ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                >
-                                    Generate Passphrase
-                                </button>
-                                <button
-                                    onClick={savePassphrase}
-                                    disabled={!serverReachable}
-                                    className={`px-8 py-3 flex-1 rounded-xl font-medium transition-all shadow-lg min-w-[140px] border border-transparent ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${saveStatus === 'idle' ? (serverReachable ? 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-600') + ' shadow-indigo-500/25 text-white' :
-                                        saveStatus === 'saving' ? 'bg-indigo-500 text-white animate-pulse' :
-                                            saveStatus === 'saved' ? 'bg-emerald-500 text-white shadow-emerald-500/25 border-emerald-400' :
-                                                'bg-rose-500 text-white shadow-rose-500/25 border-rose-400'
-                                        }`}
-                                >
-                                    {saveStatus === 'idle' && 'Apply'}
-                                    {saveStatus === 'saving' && 'Syncing...'}
-                                    {saveStatus === 'saved' && 'Enforced!'}
-                                    {saveStatus === 'error' && 'Sync Failed'}
-                                </button>
-                            </div>
-                            <div className="text-center text-sm font-medium text-slate-400 mt-2">
-                                Current passphrase: {activePassphrase ? (
-                                    <span className="text-indigo-400 italic font-mono px-2">{activePassphrase}</span>
+                            {/* Current Passphrase Prominent Display */}
+                            <div className="mb-8 p-6 bg-slate-900/60 rounded-xl border border-slate-700/50 shadow-inner text-center">
+                                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Active Public Passphrase</h4>
+                                {activePassphrase ? (
+                                    <div className="text-3xl font-mono font-bold text-emerald-400 tracking-wider">
+                                        {activePassphrase}
+                                    </div>
                                 ) : (
-                                    <span className="relative group cursor-default text-slate-500 italic font-mono px-2">
+                                    <div className="relative group cursor-default text-xl text-slate-500 italic font-mono">
                                         Initializing...
                                         <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-700 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
                                             Cannot fetch passphrase. The server may be offline.
                                         </span>
-                                    </span>
+                                    </div>
                                 )}
+                            </div>
+                        </div>
+
+                        {/* Editor Section Demoted & Inline */}
+                        <div className="mt-2">
+                            <h4 className="text-xs font-medium text-slate-400 mb-2 uppercase tracking-wider">Change Passphrase</h4>
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="text"
+                                    value={draftPassphrase}
+                                    onChange={(e) => setDraftPassphrase(e.target.value)}
+                                    disabled={!serverReachable}
+                                    style={{ maxWidth: '180px' }}
+                                    className={`bg-slate-900/40 border border-slate-700/50 px-3 py-1.5 rounded-lg text-sm tracking-wide text-slate-300 font-mono focus:outline-none focus:border-slate-500 transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                />
+                                <button
+                                    onClick={generateRandomPassphrase}
+                                    disabled={!serverReachable}
+                                    className={`px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs font-medium transition-colors text-slate-400 ${serverReachable ? 'hover:bg-slate-700' : 'opacity-50 cursor-not-allowed'}`}
+                                >
+                                    Auto-Gen
+                                </button>
+                                <button
+                                    onClick={savePassphrase}
+                                    disabled={!serverReachable}
+                                    className={`px-3 py-1.5 flex-1 rounded-lg text-xs font-medium transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${saveStatus === 'idle' ? (serverReachable ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-700 text-slate-400') :
+                                        saveStatus === 'saving' ? 'bg-slate-600 text-slate-300 animate-pulse' :
+                                            saveStatus === 'saved' ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-800/50' :
+                                                'bg-rose-900/30 text-rose-400 border border-rose-800/50'
+                                        }`}
+                                >
+                                    {saveStatus === 'idle' && 'Apply'}
+                                    {saveStatus === 'saving' && '...'}
+                                    {saveStatus === 'saved' && 'Saved!'}
+                                    {saveStatus === 'error' && 'Failed'}
+                                </button>
                             </div>
                         </div>
                     </div>
