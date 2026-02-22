@@ -7,7 +7,9 @@ import TokenPrompt from './components/TokenPrompt';
 interface TextSpan {
     id: string;
     en: string;
-    ind: string;
+    orig: string;
+    start_ms?: number;
+    end_ms?: number;
     isLineBreak?: boolean;
 }
 
@@ -71,13 +73,13 @@ export default function App() {
     const [isValidating, setIsValidating] = useState(false);
     const [sonioxActive, setSonioxActive] = useState(false);
 
-    // Desktop left panel Indonesian stream
-    const [draftTextId, setDraftTextId] = useState('');
+    // Desktop left panel Original stream
+    const [draftTextOrig, setDraftTextOrig] = useState('');
 
     // Dynamic Popover English stream
     const [spans, setSpans] = useState<TextSpan[]>([]);
     const [draftTextEn, setDraftTextEn] = useState('');
-    const [activePopover, setActivePopover] = useState<{ id: string; ind: string; } | null>(null);
+    const [activePopover, setActivePopover] = useState<{ id: string; orig: string; } | null>(null);
     const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
     const [topAlpha, setTopAlpha] = useState(1);
 
@@ -177,45 +179,20 @@ export default function App() {
 
     const ttsBufferRef = useRef('');
 
-    // Buffer for Indonesian words arriving before English chunks
-    const pendingIndRef = useRef('');
+    // Buffer for Original words arriving before English chunks
+    const pendingOrigRef = useRef('');
 
     const wsRef = useRef<WebSocket | null>(null);
     const scrollRefEn = useRef<HTMLDivElement>(null);
-    const scrollRefId = useRef<HTMLDivElement>(null);
+    const scrollRefOrig = useRef<HTMLDivElement>(null);
 
     const [reconnectTrigger, setReconnectTrigger] = useState(0);
     const reconnectTimeoutRef = useRef<number | null>(null);
 
-    // Auto-scroll to bottom as new text streams in
-    useEffect(() => {
-        if (scrollRefEn.current) {
-            scrollRefEn.current.scrollTop = scrollRefEn.current.scrollHeight;
-        }
-        if (scrollRefId.current) {
-            scrollRefId.current.scrollTop = scrollRefId.current.scrollHeight;
-        }
-    }, [spans, draftTextEn, draftTextId]);
+    const isAutoScrolling = useRef(false);
+    const scrollTimeoutRef = useRef<number | null>(null);
 
     const updatePopoverPosition = () => {
-        if (scrollRefEn.current) {
-            const el = scrollRefEn.current;
-            const containerH = el.clientHeight;
-            const contentH = el.firstElementChild?.clientHeight || 0;
-            const fullness = containerH > 0 ? Math.min(1, contentH / containerH) : 0;
-            setTopAlpha(1.0 - (0.7 * fullness));
-
-            // Sync scroller for Indonesian
-            if (scrollRefId.current) {
-                const scrollTop = el.scrollTop;
-                const scrollHeight = el.scrollHeight;
-                const scrollRatio = scrollTop / (scrollHeight - containerH || 1);
-                const idHeight = scrollRefId.current.scrollHeight;
-                const idClient = scrollRefId.current.clientHeight;
-                scrollRefId.current.scrollTop = scrollRatio * (idHeight - idClient);
-            }
-        }
-
         if (!activePopover) return;
         const el = document.getElementById(`span-${activePopover.id}`);
         if (!el) {
@@ -226,7 +203,6 @@ export default function App() {
         const rect = el.getBoundingClientRect();
         const container = scrollRefEn.current?.getBoundingClientRect();
 
-        // Hide popover if the clicked span scrolls completely out of the English box bounds
         if (container) {
             if (rect.bottom < container.top || rect.top > container.bottom) {
                 setPopoverRect(null);
@@ -236,15 +212,87 @@ export default function App() {
         setPopoverRect(rect);
     };
 
-    // Update position whenever text changes or window resizes
-    useEffect(() => {
-        updatePopoverPosition();
-    }, [activePopover, spans, draftTextEn]);
+    const handleScroll = () => {
+        if (!scrollRefEn.current) return;
+        const el = scrollRefEn.current;
+        const containerH = el.clientHeight;
+        const contentH = el.firstElementChild?.clientHeight || 0;
+        const fullness = containerH > 0 ? Math.min(1, contentH / containerH) : 0;
+        setTopAlpha(1.0 - (0.7 * fullness));
 
+        // Sync scroller for Original stream
+        if (scrollRefOrig.current) {
+            const scrollTop = el.scrollTop;
+            const scrollHeight = el.scrollHeight;
+            const scrollRatio = scrollTop / (scrollHeight - containerH || 1);
+            const origHeight = scrollRefOrig.current.scrollHeight;
+            const origClient = scrollRefOrig.current.clientHeight;
+            scrollRefOrig.current.scrollTop = scrollRatio * (origHeight - origClient);
+        }
+
+        if (activePopover) {
+            if (!isAutoScrolling.current) {
+                // Manual user scroll -> dismiss
+                setActivePopover(null);
+                setPopoverRect(null);
+            } else {
+                updatePopoverPosition();
+            }
+        }
+    };
+
+    // Auto-scroll to bottom as new text streams in
     useEffect(() => {
-        window.addEventListener('resize', updatePopoverPosition);
-        return () => window.removeEventListener('resize', updatePopoverPosition);
+        if (scrollRefEn.current) {
+            isAutoScrolling.current = true;
+            scrollRefEn.current.scrollTop = scrollRefEn.current.scrollHeight;
+
+            // Allow DOM repaint to settle before calculating offset rect
+            requestAnimationFrame(() => {
+                updatePopoverPosition();
+
+                if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+                scrollTimeoutRef.current = window.setTimeout(() => {
+                    isAutoScrolling.current = false;
+                }, 100);
+            });
+        }
+    }, [spans, draftTextEn, draftTextOrig]);
+
+    // Tap outside to dismiss
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (!activePopover) return;
+            const target = e.target as HTMLElement;
+            // Never dismiss if clicking inside the popover itself or inside the English text area
+            const isClickInPopover = target.closest('#translation-popover');
+            const isClickInEnBox = scrollRefEn.current?.contains(target);
+
+            if (!isClickInPopover && !isClickInEnBox) {
+                setActivePopover(null);
+                setPopoverRect(null);
+            }
+        };
+        // Use mousedown instead of click to trigger before simulated/child bubbling
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [activePopover]);
+
+    // Update position on window resize
+    useEffect(() => {
+        const handleResize = () => {
+            isAutoScrolling.current = true;
+            updatePopoverPosition();
+            if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+            scrollTimeoutRef.current = window.setTimeout(() => {
+                isAutoScrolling.current = false;
+            }, 100);
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [activePopover]);
+
+
 
     const { requestWakeLock, releaseWakeLock } = useWakeLock();
 
@@ -279,15 +327,26 @@ export default function App() {
                 if (payload.tokens && Array.isArray(payload.tokens)) {
                     // Separate containers for this chunk tick
                     const incomingSpans: TextSpan[] = [];
-                    let newFinalId = '';
-                    let newDraftId = '';
+                    let newDraftOrig = '';
                     let newDraftEn = '';
                     let currentSpanEn = '';
+                    let minStartMs: number | undefined = undefined;
+                    let maxEndMs: number | undefined = undefined;
 
                     payload.tokens.forEach((token: any) => {
                         // Per user request, STRICT routing based on Soniox doc status
                         const isTranslation = token.translation_status === 'translation' || token.translation_status === 'none';
                         const isOriginal = token.translation_status === 'original' || token.translation_status === 'none' || token.translation_status === undefined;
+
+                        // Capture timestamps from any final token
+                        if (token.is_final) {
+                            if (token.start_ms !== undefined && token.start_ms !== null) {
+                                minStartMs = minStartMs === undefined ? token.start_ms : Math.min(minStartMs, token.start_ms);
+                            }
+                            if (token.end_ms !== undefined && token.end_ms !== null) {
+                                maxEndMs = maxEndMs === undefined ? token.end_ms : Math.max(maxEndMs, token.end_ms);
+                            }
+                        }
 
                         // Handle <end> marker spacing explicitly as a layout block rather than \n text
                         // This prevents highlight bugs and popovers attaching to invisible space
@@ -305,16 +364,20 @@ export default function App() {
                                 ttsBufferRef.current = '';
 
                                 // Flush anything currently in the buffer before adding the break
-                                if (currentSpanEn || pendingIndRef.current) {
+                                if (currentSpanEn || pendingOrigRef.current) {
                                     incomingSpans.push({
                                         id: generateId(),
                                         en: currentSpanEn,
-                                        ind: pendingIndRef.current
+                                        orig: pendingOrigRef.current,
+                                        start_ms: minStartMs,
+                                        end_ms: maxEndMs
                                     });
                                     currentSpanEn = '';
-                                    pendingIndRef.current = '';
+                                    pendingOrigRef.current = '';
+                                    minStartMs = undefined;
+                                    maxEndMs = undefined;
                                 }
-                                incomingSpans.push({ id: generateId(), en: '', ind: '', isLineBreak: true });
+                                incomingSpans.push({ id: generateId(), en: '', orig: '', isLineBreak: true });
                             }
                             return; // Skip normal text processing for <end>
                         }
@@ -327,12 +390,11 @@ export default function App() {
                             }
                             if (isOriginal) {
                                 // Accumulate original text to be attached to the upcoming translation
-                                newFinalId += token.text;
-                                pendingIndRef.current += token.text;
+                                pendingOrigRef.current += token.text;
                             }
                         } else {
                             if (isTranslation) newDraftEn += token.text;
-                            if (isOriginal) newDraftId += token.text;
+                            if (isOriginal) newDraftOrig += token.text;
                         }
                     });
 
@@ -341,13 +403,15 @@ export default function App() {
                         incomingSpans.push({
                             id: generateId(),
                             en: currentSpanEn,
-                            ind: pendingIndRef.current
+                            orig: pendingOrigRef.current,
+                            start_ms: minStartMs,
+                            end_ms: maxEndMs
                         });
-                        pendingIndRef.current = '';
+                        pendingOrigRef.current = '';
                     }
 
                     // Update UI states
-                    setDraftTextId(newDraftId);
+                    setDraftTextOrig(newDraftOrig);
 
                     if (incomingSpans.length > 0) {
                         setSpans(prev => {
@@ -361,16 +425,17 @@ export default function App() {
 
                                 const last = newSpans[newSpans.length - 1];
 
-                                // Consolidate consecutive spans IF AND ONLY IF they share the exact same Indonesian context
+                                // Consolidate consecutive spans IF AND ONLY IF they share the exact same Original context
                                 // meaning they belong to the same translation block.
                                 // Linebreaks are never consolidated with text.
                                 if (!newSpan.isLineBreak && !last.isLineBreak &&
-                                    ((last.ind === newSpan.ind && newSpan.ind !== '') ||
-                                        (last.ind === '' && newSpan.ind === ''))) {
+                                    ((last.orig === newSpan.orig && newSpan.orig !== '') ||
+                                        (last.orig === '' && newSpan.orig === ''))) {
 
                                     newSpans[newSpans.length - 1] = {
                                         ...last,
-                                        en: last.en + newSpan.en
+                                        en: last.en + newSpan.en,
+                                        end_ms: newSpan.end_ms ?? last.end_ms
                                     };
                                 } else {
                                     // Differing context or it's a linebreak -> push as distinct span
@@ -454,7 +519,6 @@ export default function App() {
         <div
             className="h-full overflow-hidden bg-[#f2f2f2] dark:bg-gray-900 p-2 sm:p-8 flex flex-col transition-colors duration-200"
             onClick={() => {
-                setActivePopover(null);
                 setIsDisplayMenuOpen(false);
                 // Secondary attempt: Browsers often require a direct user interaction to grant Wake Lock. 
                 // Any tap anywhere on the app will attempt to grab the lock if we don't already have it.
@@ -615,7 +679,7 @@ export default function App() {
                         </div>
 
                         <div
-                            ref={scrollRefId}
+                            ref={scrollRefOrig}
                             className={`flex-1 overflow-y-auto overflow-x-hidden leading-relaxed font-sans relative text-gray-900 dark:text-gray-100 transition-colors duration-200 ${getFontSizeClass()}`}
                             style={{
                                 WebkitMaskImage: `linear-gradient(to bottom, rgba(0,0,0,${topAlpha.toFixed(2)}) 0%, rgba(0,0,0,1) 30%)`,
@@ -626,7 +690,7 @@ export default function App() {
                                 maskRepeat: 'no-repeat',
                             }}
                         >
-                            {spans.length === 0 && draftTextId === '' ? (
+                            {spans.length === 0 && draftTextOrig === '' ? (
                                 <div className="text-gray-400 dark:text-gray-500 italic mt-4 text-center">
                                     The original speech will appear here...
                                 </div>
@@ -639,14 +703,14 @@ export default function App() {
                                             return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
                                         }
                                         return (
-                                            <span key={`${span.id}-id`} className="relative transition-colors">
-                                                {span.ind}
+                                            <span key={`${span.id}-orig`} className="relative transition-colors">
+                                                {span.orig}
                                             </span>
                                         );
                                     })}
-                                    {draftTextId && (
+                                    {draftTextOrig && (
                                         <span className="text-gray-400 dark:text-gray-500 transition-opacity duration-200">
-                                            {draftTextId}
+                                            {draftTextOrig}
                                         </span>
                                     )}
                                 </p>
@@ -662,7 +726,7 @@ export default function App() {
 
                         <div
                             ref={scrollRefEn}
-                            onScroll={updatePopoverPosition}
+                            onScroll={handleScroll}
                             className={`flex-1 overflow-y-auto overflow-x-hidden leading-relaxed font-sans relative text-gray-900 dark:text-gray-100 transition-colors duration-200 ${getFontSizeClass()}`}
                             style={{
                                 // Dim text at the top of the scrolling viewport boundaries.
@@ -693,16 +757,18 @@ export default function App() {
                                                 id={`span-${span.id}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    // Only show popover if there's actual Indonesian text to show
-                                                    if (span.ind.trim() && span.ind !== '<end>') {
+                                                    // Only show popover if there's actual Original text to show
+                                                    if (span.orig.trim() && span.orig !== '<end>') {
                                                         if (activePopover?.id === span.id) {
                                                             setActivePopover(null);
+                                                            setPopoverRect(null);
                                                         } else {
-                                                            setActivePopover({ id: span.id, ind: span.ind });
+                                                            setActivePopover({ id: span.id, orig: span.orig });
+                                                            setPopoverRect(e.currentTarget.getBoundingClientRect());
                                                         }
                                                     }
                                                 }}
-                                                className={`relative transition-colors rounded ${span.ind.trim() && span.ind !== '<end>' ? 'cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600' : ''} ${activePopover?.id === span.id ? 'bg-blue-200 dark:bg-blue-800' : ''}`}
+                                                className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? 'cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600' : ''} ${activePopover?.id === span.id ? 'bg-blue-200 dark:bg-blue-800' : ''}`}
                                             >
                                                 {span.en}
                                             </span>
@@ -724,7 +790,7 @@ export default function App() {
                     if (!activePopover || !popoverRect) return null;
 
                     const rect = popoverRect;
-                    const { ind } = activePopover;
+                    const { orig } = activePopover;
                     // Auto-flip tracking: if we're near the bottom of the screen, flip above
                     const spaceBelow = window.innerHeight - rect.bottom;
                     const isBottomHalf = spaceBelow < 150 && rect.top > 150;
@@ -744,6 +810,7 @@ export default function App() {
 
                     return (
                         <div
+                            id="translation-popover"
                             className="fixed z-[100] p-3 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm rounded-lg shadow-2xl cursor-auto font-normal leading-snug"
                             style={{
                                 width: popoverWidth,
@@ -757,7 +824,7 @@ export default function App() {
                             onClick={(e) => e.stopPropagation()}
                         >
                             <span className="block font-semibold text-gray-400 dark:text-gray-500 mb-1 text-[10px] uppercase tracking-wider">Original</span>
-                            {ind}
+                            {orig}
                             <span
                                 className={`absolute border-[6px] border-transparent ${isBottomHalf ? 'top-full border-t-gray-900 dark:border-t-gray-100' : 'bottom-full border-b-gray-900 dark:border-b-gray-100'}`}
                                 style={{ left: Math.max(8, Math.min(pointerLeft - 6, popoverWidth - 20)) }}

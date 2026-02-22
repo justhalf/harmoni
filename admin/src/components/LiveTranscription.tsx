@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 
 interface LiveTranscriptionProps {
@@ -9,8 +10,10 @@ type FontSize = 'small' | 'regular' | 'large';
 
 interface TextSpan {
     id: string;
-    ind: string;
+    orig: string;
     en: string;
+    start_ms?: number;
+    end_ms?: number;
     isLineBreak?: boolean;
 }
 
@@ -55,17 +58,94 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
     // State for the streaming text
     const [spans, setSpans] = useState<TextSpan[]>([]);
     const [draftTextEn, setDraftTextEn] = useState<string>('');
-    const [draftTextId, setDraftTextId] = useState<string>('');
-    const pendingIndRef = useRef<string>('');
+    const [draftTextOrig, setDraftTextOrig] = useState<string>('');
+    const pendingOrigRef = useRef<string>('');
+
+    const [activePopover, setActivePopover] = useState<{ id: string; orig: string; } | null>(null);
+    const activePopoverIdRef = useRef<string | null>(null);
+    const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
 
     const wsRef = useRef<WebSocket | null>(null);
     const scrollRefEn = useRef<HTMLDivElement>(null);
-    const scrollRefId = useRef<HTMLDivElement>(null);
+    const scrollRefOrig = useRef<HTMLDivElement>(null);
+
+    const isAutoScrolling = useRef(false);
+    const scrollTimeoutRef = useRef<number | null>(null);
 
     // Fade-out parameters
     const [topAlpha, setTopAlpha] = useState(1);
 
     const generateId = () => Math.random().toString(36).substring(2, 11);
+
+    const downloadSrt = (lang: 'en' | 'orig') => {
+        if (spans.length === 0) return;
+
+        let srtContent = '';
+        let index = 1;
+
+        let fallbackMs = 0; // Fallback for purely visual spans without timestamps (e.g., lines breaks or Soniox skipping them)
+
+        for (const span of spans) {
+            if (span.isLineBreak) {
+                fallbackMs += 1000;
+                continue;
+            }
+
+            const text = lang === 'en' ? span.en : span.orig;
+            if (!text.trim() || text === '<end>') continue;
+
+            const startMs = span.start_ms ?? fallbackMs;
+            const endMs = span.end_ms ?? (startMs + Math.max(1000, text.length * 50));
+
+            fallbackMs = endMs + 500;
+
+            const formatTime = (ms: number) => {
+                const date = new Date(ms);
+                const MathFloorHours = Math.floor(ms / 3600000);
+                const UTCHours = String(MathFloorHours).padStart(2, '0');
+                const UTCMinutes = String(date.getUTCMinutes()).padStart(2, '0');
+                const UTCSeconds = String(date.getUTCSeconds()).padStart(2, '0');
+                const UTCMilliseconds = String(date.getUTCMilliseconds()).padStart(3, '0');
+                return `${UTCHours}:${UTCMinutes}:${UTCSeconds},${UTCMilliseconds}`;
+            };
+
+            srtContent += `${index}\n`;
+            srtContent += `${formatTime(startMs)} --> ${formatTime(endMs)}\n`;
+            srtContent += `${text}\n\n`;
+            index++;
+        }
+
+        const blob = new Blob([srtContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const datestring = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        a.download = `GPBB_Transcription_${lang}_${datestring}.srt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    const updatePopoverPosition = () => {
+        if (!activePopoverIdRef.current) return;
+        const el = document.getElementById(`span-${activePopoverIdRef.current}`);
+        if (!el) {
+            setPopoverRect(null);
+            return;
+        }
+
+        const rect = el.getBoundingClientRect();
+        const container = scrollRefEn.current?.getBoundingClientRect();
+
+        if (container) {
+            if (rect.bottom < container.top || rect.top > container.bottom) {
+                setPopoverRect(null);
+                return;
+            }
+        }
+        setPopoverRect(rect);
+    };
 
     const handleScroll = () => {
         if (!scrollRefEn.current) return;
@@ -81,25 +161,78 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
             setTopAlpha(opacity);
         }
 
-        // Sync scroller for Indonesian
-        if (scrollRefId.current) {
+        // Sync scroller for Original
+        if (scrollRefOrig.current) {
             const scrollRatio = scrollTop / (scrollHeight - clientHeight || 1);
-            const idHeight = scrollRefId.current.scrollHeight;
-            const idClient = scrollRefId.current.clientHeight;
-            scrollRefId.current.scrollTop = scrollRatio * (idHeight - idClient);
+            const origHeight = scrollRefOrig.current.scrollHeight;
+            const origClient = scrollRefOrig.current.clientHeight;
+            scrollRefOrig.current.scrollTop = scrollRatio * (origHeight - origClient);
+        }
+
+        if (activePopoverIdRef.current) {
+            if (!isAutoScrolling.current) {
+                // Manual user scroll -> dismiss
+                activePopoverIdRef.current = null;
+                setActivePopover(null);
+                setPopoverRect(null);
+            } else {
+                updatePopoverPosition();
+            }
         }
     };
 
+    // Update position whenever activePopover changes, or on window resize
+    useEffect(() => {
+        const handleResize = () => {
+            isAutoScrolling.current = true;
+            updatePopoverPosition();
+            if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+            scrollTimeoutRef.current = window.setTimeout(() => {
+                isAutoScrolling.current = false;
+            }, 100);
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [activePopover]);
+    // Tap outside to dismiss
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (!activePopover) return;
+            const target = e.target as HTMLElement;
+            // Never dismiss if clicking inside the popover itself or inside the English text area
+            const isClickInPopover = target.closest('#translation-popover');
+            const isClickInEnBox = scrollRefEn.current?.contains(target);
+
+            if (!isClickInPopover && !isClickInEnBox) {
+                activePopoverIdRef.current = null;
+                setActivePopover(null);
+                setPopoverRect(null);
+            }
+        };
+        // Use mousedown instead of click to trigger before simulated/child bubbling
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [activePopover]);
     const [reconnectTrigger, setReconnectTrigger] = useState(0);
     const reconnectTimeoutRef = useRef<number | null>(null);
 
     // Auto-scroll to bottom as new text streams in
     useEffect(() => {
         if (scrollRefEn.current) {
+            isAutoScrolling.current = true;
             scrollRefEn.current.scrollTop = scrollRefEn.current.scrollHeight;
-            handleScroll();
+
+            // Allow DOM repaint to settle before calculating offset rect
+            requestAnimationFrame(() => {
+                updatePopoverPosition();
+
+                if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+                scrollTimeoutRef.current = window.setTimeout(() => {
+                    isAutoScrolling.current = false;
+                }, 100);
+            });
         }
-    }, [spans, draftTextEn, draftTextId]);
+    }, [spans, draftTextEn, draftTextOrig]);
 
     useEffect(() => {
         if (!sessionToken) return;
@@ -129,26 +262,41 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                 if (payload.tokens && Array.isArray(payload.tokens)) {
                     // Separate containers for this chunk tick
                     const incomingSpans: TextSpan[] = [];
-                    let newDraftId = '';
+                    let newDraftOrig = '';
                     let newDraftEn = '';
                     let currentSpanEn = '';
+                    let minStartMs: number | undefined = undefined;
+                    let maxEndMs: number | undefined = undefined;
 
                     payload.tokens.forEach((token: any) => {
                         const isTranslation = token.translation_status === 'translation' || token.translation_status === 'none';
                         const isOriginal = token.translation_status === 'original' || token.translation_status === 'none' || token.translation_status === undefined;
 
+                        if (token.is_final) {
+                            if (token.start_ms !== undefined && token.start_ms !== null) {
+                                minStartMs = minStartMs === undefined ? token.start_ms : Math.min(minStartMs, token.start_ms);
+                            }
+                            if (token.end_ms !== undefined && token.end_ms !== null) {
+                                maxEndMs = maxEndMs === undefined ? token.end_ms : Math.max(maxEndMs, token.end_ms);
+                            }
+                        }
+
                         if (token.text === '<end>') {
                             if (token.is_final) {
-                                if (currentSpanEn || pendingIndRef.current) {
+                                if (currentSpanEn || pendingOrigRef.current) {
                                     incomingSpans.push({
                                         id: generateId(),
                                         en: currentSpanEn,
-                                        ind: pendingIndRef.current
+                                        orig: pendingOrigRef.current,
+                                        start_ms: minStartMs,
+                                        end_ms: maxEndMs
                                     });
                                     currentSpanEn = '';
-                                    pendingIndRef.current = '';
+                                    pendingOrigRef.current = '';
+                                    minStartMs = undefined;
+                                    maxEndMs = undefined;
                                 }
-                                incomingSpans.push({ id: generateId(), en: '', ind: '', isLineBreak: true });
+                                incomingSpans.push({ id: generateId(), en: '', orig: '', isLineBreak: true });
                             }
                             return;
                         }
@@ -158,11 +306,11 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                 currentSpanEn += token.text;
                             }
                             if (isOriginal) {
-                                pendingIndRef.current += token.text;
+                                pendingOrigRef.current += token.text;
                             }
                         } else {
                             if (isTranslation) newDraftEn += token.text;
-                            if (isOriginal) newDraftId += token.text;
+                            if (isOriginal) newDraftOrig += token.text;
                         }
                     });
 
@@ -171,13 +319,15 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                         incomingSpans.push({
                             id: generateId(),
                             en: currentSpanEn,
-                            ind: pendingIndRef.current
+                            orig: pendingOrigRef.current,
+                            start_ms: minStartMs,
+                            end_ms: maxEndMs
                         });
-                        pendingIndRef.current = '';
+                        pendingOrigRef.current = '';
                     }
 
                     // Update UI states
-                    setDraftTextId(newDraftId);
+                    setDraftTextOrig(newDraftOrig);
 
                     if (incomingSpans.length > 0) {
                         setSpans(prev => {
@@ -192,12 +342,13 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                 const last = newSpans[newSpans.length - 1];
 
                                 if (!newSpan.isLineBreak && !last.isLineBreak &&
-                                    ((last.ind === newSpan.ind && newSpan.ind !== '') ||
-                                        (last.ind === '' && newSpan.ind === ''))) {
+                                    ((last.orig === newSpan.orig && newSpan.orig !== '') ||
+                                        (last.orig === '' && newSpan.orig === ''))) {
 
                                     newSpans[newSpans.length - 1] = {
                                         ...last,
-                                        en: last.en + newSpan.en
+                                        en: last.en + newSpan.en,
+                                        end_ms: newSpan.end_ms ?? last.end_ms
                                     };
                                 } else {
                                     newSpans.push(newSpan);
@@ -279,8 +430,8 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                             onClick={() => {
                                 setSpans([]);
                                 setDraftTextEn('');
-                                setDraftTextId('');
-                                pendingIndRef.current = '';
+                                setDraftTextOrig('');
+                                pendingOrigRef.current = '';
                             }}
                             className={`rounded-r-lg px-3 py-1.5 flex flex-row items-center justify-center transition-colors focus:outline-none ${isDarkMode ? 'text-slate-300 hover:text-white hover:bg-slate-700/50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}`}
                         >
@@ -316,6 +467,26 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                             className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${fontSize === 'large' ? (isDarkMode ? 'bg-slate-700 shadow text-white' : 'bg-white shadow text-slate-900') : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700')}`}
                                         >
                                             Large
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="mb-4">
+                                    <label className={`text-xs font-semibold mb-2 block ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Export Settings</label>
+                                    <div className="space-y-2">
+                                        <button
+                                            onClick={() => downloadSrt('orig')}
+                                            className={`w-full py-2 px-3 text-sm font-medium rounded-lg transition-colors flex items-center justify-center ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'}`}
+                                        >
+                                            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                            Download Original (.srt)
+                                        </button>
+                                        <button
+                                            onClick={() => downloadSrt('en')}
+                                            className={`w-full py-2 px-3 text-sm font-medium rounded-lg transition-colors flex items-center justify-center ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'}`}
+                                        >
+                                            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                            Download Translation (.srt)
                                         </button>
                                     </div>
                                 </div>
@@ -379,7 +550,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
             </div>
 
             {/* Translation Viewer Container */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1 min-h-0">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1 min-h-0 overflow-hidden">
                 {/* Indonesian Box */}
                 <div className={`flex flex-col min-h-0 rounded-xl p-4 sm:p-6 border shadow-inner transition-colors duration-200 ${isDarkMode ? 'bg-slate-900/50 border-slate-700/50' : 'bg-white border-slate-200'}`}>
                     <div className={`text-sm font-semibold mb-4 border-b pb-2 text-center shrink-0 select-none ${isDarkMode ? 'text-slate-400 border-slate-700/50' : 'text-slate-500 border-slate-200'}`}>
@@ -387,7 +558,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                     </div>
 
                     <div
-                        ref={scrollRefId}
+                        ref={scrollRefOrig}
                         className={`overflow-y-auto overflow-x-hidden leading-relaxed font-sans scrollbar-thin scrollbar-thumb-slate-600 scrollbar-track-transparent pr-2 flex-1 transition-colors duration-200 ${getFontSizeClass()} ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}
                         style={{
                             WebkitMaskImage: `linear-gradient(to bottom, rgba(0,0,0,${topAlpha.toFixed(2)}) 0%, rgba(0,0,0,1) 30%)`,
@@ -398,7 +569,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                             maskRepeat: 'no-repeat',
                         }}
                     >
-                        {spans.length === 0 && draftTextId === '' ? (
+                        {spans.length === 0 && draftTextOrig === '' ? (
                             <div className={`italic mt-4 text-center ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                                 The original speech will appear here...
                             </div>
@@ -410,14 +581,14 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                         return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
                                     }
                                     return (
-                                        <span key={`${span.id}-id`} className="relative transition-colors">
-                                            {span.ind}
+                                        <span key={`${span.id}-orig`} className="relative transition-colors">
+                                            {span.orig}
                                         </span>
                                     );
                                 })}
-                                {draftTextId && (
+                                {draftTextOrig && (
                                     <span className={`transition-opacity duration-200 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                                        {draftTextId}
+                                        {draftTextOrig}
                                     </span>
                                 )}
                             </p>
@@ -459,7 +630,21 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                         <span
                                             key={span.id}
                                             id={`span-${span.id}`}
-                                            className="relative transition-colors rounded"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (span.orig.trim() && span.orig !== '<end>') {
+                                                    if (activePopover?.id === span.id) {
+                                                        activePopoverIdRef.current = null;
+                                                        setActivePopover(null);
+                                                        setPopoverRect(null);
+                                                    } else {
+                                                        activePopoverIdRef.current = span.id;
+                                                        setActivePopover({ id: span.id, orig: span.orig });
+                                                        setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                                    }
+                                                }
+                                            }}
+                                            className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? (isDarkMode ? 'cursor-pointer hover:bg-slate-700' : 'cursor-pointer hover:bg-slate-200') : ''} ${activePopover?.id === span.id ? (isDarkMode ? 'bg-indigo-900/50' : 'bg-indigo-100') : ''}`}
                                         >
                                             {span.en}
                                         </span>
@@ -475,6 +660,56 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                     </div>
                 </div>
             </div>
+
+            {/* Fixed Overlay Popover */}
+            {(function renderPopover() {
+                if (!activePopover || !popoverRect) return null;
+
+                const rect = popoverRect;
+                const { orig } = activePopover;
+                // Auto-flip tracking: if we're near the bottom of the screen, flip above
+                const spaceBelow = window.innerHeight - rect.bottom;
+                const isBottomHalf = spaceBelow < 150 && rect.top > 150;
+
+                // Exact screen dimension tracking for X clamping
+                const centerX = rect.left + rect.width / 2;
+                const popoverWidth = Math.min(window.innerWidth * 0.85, 320);
+
+                let leftPos = centerX - popoverWidth / 2;
+                const padding = 16;
+                // Force the box to stay fully on-screen
+                if (leftPos < padding) leftPos = padding;
+                if (leftPos + popoverWidth > window.innerWidth - padding) leftPos = window.innerWidth - popoverWidth - padding;
+
+                // Ensure triangle precisely targets the word center regardless of box clamp
+                const pointerLeft = centerX - leftPos;
+
+                return createPortal(
+                    <div
+                        key={activePopover.id}
+                        id="translation-popover"
+                        className={`fixed z-[100] p-3 text-sm rounded-lg shadow-2xl cursor-auto font-normal leading-snug ${isDarkMode ? 'bg-slate-100 text-slate-900' : 'bg-slate-800 text-white'}`}
+                        style={{
+                            width: popoverWidth,
+                            left: leftPos,
+                            ...(isBottomHalf ? {
+                                bottom: window.innerHeight - rect.top + 8
+                            } : {
+                                top: rect.bottom + 8
+                            })
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <span className={`block font-semibold mb-1 text-[10px] uppercase tracking-wider ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Original</span>
+                        {orig}
+                        <span
+                            className={`absolute border-[6px] border-transparent ${isBottomHalf ? (isDarkMode ? 'top-full border-t-slate-100' : 'top-full border-t-slate-800') : (isDarkMode ? 'bottom-full border-b-slate-100' : 'bottom-full border-b-slate-800')}`}
+                            style={{ left: Math.max(8, Math.min(pointerLeft - 6, popoverWidth - 20)) }}
+                        ></span>
+                    </div>,
+                    document.body
+                );
+            })()}
 
             {/* Mobile Bottom Navigation Bar / Display Dropdown combo */}
             {isDisplayMenuOpen && (
@@ -501,6 +736,26 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                 className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${fontSize === 'large' ? (isDarkMode ? 'bg-slate-700 shadow text-white' : 'bg-white shadow text-slate-900') : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700')}`}
                             >
                                 Large
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="mb-4">
+                        <label className={`text-xs font-semibold mb-2 block ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Export Settings</label>
+                        <div className="space-y-2">
+                            <button
+                                onClick={() => downloadSrt('orig')}
+                                className={`w-full py-2.5 px-3 text-sm font-medium rounded-lg transition-colors flex items-center justify-center ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'}`}
+                            >
+                                <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                Download Original (.srt)
+                            </button>
+                            <button
+                                onClick={() => downloadSrt('en')}
+                                className={`w-full py-2.5 px-3 text-sm font-medium rounded-lg transition-colors flex items-center justify-center ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'}`}
+                            >
+                                <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                Download Translation (.srt)
                             </button>
                         </div>
                     </div>
@@ -544,8 +799,8 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                     onClick={() => {
                         setSpans([]);
                         setDraftTextEn('');
-                        setDraftTextId('');
-                        pendingIndRef.current = '';
+                        setDraftTextOrig('');
+                        pendingOrigRef.current = '';
                     }}
                     className="px-2 py-1 flex flex-col items-center justify-center text-rose-400 hover:text-rose-300 focus:outline-none transition-colors"
                 >

@@ -296,7 +296,7 @@ export default function AdminApp() {
                             <div className="mb-2 p-6 bg-slate-900/60 rounded-xl border border-slate-700/50 shadow-inner text-center">
                                 <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Active Public Passphrase</h4>
                                 {activePassphrase ? (
-                                    <div className="text-3xl font-mono font-bold text-emerald-400 tracking-wider">
+                                    <div className="text-xl sm:text-3xl font-mono font-bold text-emerald-400 tracking-wider">
                                         {activePassphrase}
                                     </div>
                                 ) : (
@@ -313,36 +313,37 @@ export default function AdminApp() {
                         {/* Editor Section Demoted & Inline */}
                         <div className="mt-0">
                             <h4 className="text-xs font-medium text-slate-400 mb-2 uppercase tracking-wider">Change Passphrase</h4>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-col sm:flex-row gap-2">
                                 <input
                                     type="text"
                                     value={draftPassphrase}
                                     onChange={(e) => setDraftPassphrase(e.target.value)}
                                     disabled={!serverReachable}
-                                    style={{ maxWidth: '180px' }}
-                                    className={`bg-slate-900/40 border border-slate-700/50 px-3 py-1.5 rounded-lg text-sm tracking-wide text-slate-300 font-mono focus:outline-none focus:border-slate-500 transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    className={`w-full sm:w-auto sm:max-w-[180px] bg-slate-900/40 border border-slate-700/50 px-3 py-1.5 rounded-lg text-sm tracking-wide text-slate-300 font-mono focus:outline-none focus:border-slate-500 transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 />
-                                <button
-                                    onClick={generateRandomPassphrase}
-                                    disabled={!serverReachable}
-                                    className={`px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs font-medium transition-colors text-slate-400 ${serverReachable ? 'hover:bg-slate-700' : 'opacity-50 cursor-not-allowed'}`}
-                                >
-                                    Auto-Gen
-                                </button>
-                                <button
-                                    onClick={savePassphrase}
-                                    disabled={!serverReachable}
-                                    className={`px-3 py-1.5 flex-1 rounded-lg text-xs font-medium transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${saveStatus === 'idle' ? (serverReachable ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-700 text-slate-400') :
-                                        saveStatus === 'saving' ? 'bg-slate-600 text-slate-300 animate-pulse' :
-                                            saveStatus === 'saved' ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-800/50' :
-                                                'bg-rose-900/30 text-rose-400 border border-rose-800/50'
-                                        }`}
-                                >
-                                    {saveStatus === 'idle' && 'Apply'}
-                                    {saveStatus === 'saving' && '...'}
-                                    {saveStatus === 'saved' && 'Saved!'}
-                                    {saveStatus === 'error' && 'Failed'}
-                                </button>
+                                <div className="flex flex-row gap-2 w-full sm:w-auto">
+                                    <button
+                                        onClick={generateRandomPassphrase}
+                                        disabled={!serverReachable}
+                                        className={`flex-1 sm:flex-none px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs font-medium transition-colors text-slate-400 ${serverReachable ? 'hover:bg-slate-700' : 'opacity-50 cursor-not-allowed'}`}
+                                    >
+                                        Auto-Gen
+                                    </button>
+                                    <button
+                                        onClick={savePassphrase}
+                                        disabled={!serverReachable}
+                                        className={`flex-1 sm:flex-auto px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${saveStatus === 'idle' ? (serverReachable ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-700 text-slate-400') :
+                                            saveStatus === 'saving' ? 'bg-slate-600 text-slate-300 animate-pulse' :
+                                                saveStatus === 'saved' ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-800/50' :
+                                                    'bg-rose-900/30 text-rose-400 border border-rose-800/50'
+                                            }`}
+                                    >
+                                        {saveStatus === 'idle' && 'Apply'}
+                                        {saveStatus === 'saving' && '...'}
+                                        {saveStatus === 'saved' && 'Saved!'}
+                                        {saveStatus === 'error' && 'Failed'}
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
