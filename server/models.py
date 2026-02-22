@@ -23,6 +23,7 @@ class ActiveSession(BaseModel):
     audio_device_index: Optional[int] = None
     audio_device_channels: int = 1
     stop_audio_ingest: bool = False
+    admin_sessions: Set[str] = set()
     
 @dataclass
 class ConnectionManager:

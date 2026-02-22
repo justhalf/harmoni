@@ -11,6 +11,7 @@ from pydantic import BaseModel
 import os
 import logging
 import sys
+import secrets
 from uvicorn.logging import DefaultFormatter
 
 # 1. Provide a timestamped formatter format
@@ -52,7 +53,9 @@ app.add_middleware(
 
 manager = ConnectionManager()
 session_state = ActiveSession()
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "secret123")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+if not ADMIN_PASSWORD:
+    raise ValueError("ADMIN_PASSWORD not set. Aborting.")
 
 async def audio_viz_broadcaster_task(audio_queue_b: asyncio.Queue, manager: ConnectionManager):
     """Pulls binary PCM data from Queue B and broadcasts to all connected Admin visualizers."""
@@ -162,14 +165,29 @@ async def get_health():
 
 # --- Admin API Endpoints ---
 
+class AdminLoginReq(BaseModel):
+    password: str
+
+@app.post("/api/admin/login")
+async def admin_login(req: AdminLoginReq):
+    if secrets.compare_digest(req.password, ADMIN_PASSWORD):
+        new_session_token = secrets.token_urlsafe(32)
+        session_state.admin_sessions.add(new_session_token)
+        return {"admin_session_token": new_session_token}
+    raise HTTPException(status_code=401, detail="Invalid Admin Password")
+
+async def verify_admin(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized Admin")
+    token = authorization.split(" ")[1]
+    if token not in session_state.admin_sessions:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
 class SonioxToggleReq(BaseModel):
     active: bool
 
 @app.post("/api/admin/soniox/toggle")
-async def toggle_soniox(req: SonioxToggleReq, authorization: str = Header(None)):
-    if not authorization or authorization != f"Bearer {ADMIN_PASSWORD}":
-        raise HTTPException(status_code=401, detail="Unauthorized Admin")
-    
+async def toggle_soniox(req: SonioxToggleReq, _=Depends(verify_admin)):
     # Start task
     if req.active and not getattr(app.state, "soniox_task", None):
         # Empty queue first
@@ -198,16 +216,11 @@ async def toggle_soniox(req: SonioxToggleReq, authorization: str = Header(None))
     return {"status": "no_change"}
 
 @app.get("/api/admin/token")
-async def get_token(authorization: str = Header(None)):
-    if not authorization or authorization != f"Bearer {ADMIN_PASSWORD}":
-        raise HTTPException(status_code=401, detail="Unauthorized Admin")
+async def get_token(_=Depends(verify_admin)):
     return {"active_token": session_state.admin_token}
 
 @app.post("/api/admin/token")
-async def update_token(req: TokenUpdateReq, authorization: str = Header(None)):
-    if not authorization or authorization != f"Bearer {ADMIN_PASSWORD}":
-        raise HTTPException(status_code=401, detail="Unauthorized Admin")
-    
+async def update_token(req: TokenUpdateReq, _=Depends(verify_admin)):
     # Update active token
     session_state.admin_token = req.new_token
     
@@ -217,10 +230,7 @@ async def update_token(req: TokenUpdateReq, authorization: str = Header(None)):
     return {"status": "success", "active_token": session_state.admin_token}
     
 @app.get("/api/admin/audio-devices")
-async def get_audio_devices(authorization: str = Header(None)):
-    if not authorization or authorization != f"Bearer {ADMIN_PASSWORD}":
-        raise HTTPException(status_code=401, detail="Unauthorized Admin")
-    
+async def get_audio_devices(_=Depends(verify_admin)):
     p = pyaudio.PyAudio()
     
     # Get host APIs mapping
@@ -232,7 +242,7 @@ async def get_audio_devices(authorization: str = Header(None)):
         except:
             pass
             
-    # Priority for deduplication: WASAPI > DirectSound > MME. Skip WDM-KS (raw pins).
+    # Priority for deduplication: DirectSound = MME > WASAPI. Skip WDM-KS (raw pins).
     api_scores = {
         "Windows WASAPI": 2,
         "Windows DirectSound": 3,
@@ -287,10 +297,7 @@ class AudioDeviceUpdateReq(BaseModel):
     device_index: Optional[int] = None
 
 @app.post("/api/admin/audio-device")
-async def update_audio_device(req: AudioDeviceUpdateReq, authorization: str = Header(None)):
-    if not authorization or authorization != f"Bearer {ADMIN_PASSWORD}":
-        raise HTTPException(status_code=401, detail="Unauthorized Admin")
-    
+async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)):
     session_state.audio_device_index = req.device_index
     
     # Lookup the channel count so we can downmix properly
@@ -341,8 +348,8 @@ async def admin_audio_viz(websocket: WebSocket):
         return
         
     authorization = auth_data.get("authorization")
-    # Requires password on initial connection
-    if not authorization or authorization != ADMIN_PASSWORD:
+    # Requires an active session token on connection
+    if not authorization or authorization not in session_state.admin_sessions:
         await websocket.close(code=1008)
         return
     await manager.connect_viz(websocket)

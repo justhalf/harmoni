@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 
 interface VisualizerProps {
     wsEndpoint: string;
-    adminPassword: string;
+    adminSessionToken: string;
 }
 
-export default function AudioVisualizer({ wsEndpoint, adminPassword }: VisualizerProps) {
+export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: VisualizerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
@@ -36,8 +36,7 @@ export default function AudioVisualizer({ wsEndpoint, adminPassword }: Visualize
             ws.binaryType = "arraybuffer";
 
             ws.onopen = () => {
-                ws.send(JSON.stringify({ authorization: adminPassword }));
-                console.log("Admin Queue B Connected");
+                ws.send(JSON.stringify({ authorization: adminSessionToken }));
                 setIsRendering(true);
             };
 
@@ -103,7 +102,7 @@ export default function AudioVisualizer({ wsEndpoint, adminPassword }: Visualize
             }
             if (audioCtx) audioCtx.close();
         };
-    }, [wsEndpoint]);
+    }, [wsEndpoint, adminSessionToken]);
 
     useEffect(() => {
         if (!canvasRef.current) return;

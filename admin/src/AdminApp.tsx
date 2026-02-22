@@ -10,46 +10,76 @@ const WORD_BANK_ADJ = ['blue', 'morning', 'quiet', 'swift', 'deep', 'cool', 'bri
 
 export default function AdminApp() {
     const [adminPassword, setAdminPassword] = useState('');
+    const [adminSessionToken, setAdminSessionToken] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [loginError, setLoginError] = useState('');
 
     const [stats, setStats] = useState({ online: false, clients: 0, admins: 0, active: false });
     const [serverReachable, setServerReachable] = useState(false);
 
-    const [draftToken, setDraftToken] = useState('');
-    const [activeToken, setActiveToken] = useState('');
+    const [draftPassphrase, setDraftPassphrase] = useState('');
+    const [activePassphrase, setActivePassphrase] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
     const [audioDevices, setAudioDevices] = useState<{ index: number, name: string }[]>([]);
     const [selectedAudioDevice, setSelectedAudioDevice] = useState<number | ''>('');
 
-    const handleLogin = (e: React.FormEvent) => {
+    const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        setLoginError('');
         if (adminPassword.trim() !== "") {
-            setIsAuthenticated(true);
-            // In production, we'd verify this hash with the server first.
-            fetchStats();
-            fetchAdminToken();
+            try {
+                // Post to the new login endpoint that issues session tokens
+                const res = await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: adminPassword })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.admin_session_token) {
+                        const sToken = data.admin_session_token;
+                        setAdminSessionToken(sToken);
+
+                        // CRITICAL: Clear the raw password from memory entirely
+                        setAdminPassword('');
+
+                        setIsAuthenticated(true);
+                        // Start polling/fetching immediately with the new session token
+                        fetchStats(sToken);
+                        fetchInitialPassphrase(sToken);
+                    } else {
+                        setLoginError('Server returned unexpected format');
+                    }
+                } else {
+                    setLoginError('Invalid Admin Password');
+                }
+            } catch (err) {
+                setLoginError('Server unreachable');
+            }
         }
     };
 
-    const fetchAdminToken = async () => {
+    const fetchInitialPassphrase = async (sToken: string) => {
         try {
             const res = await fetch('/api/admin/token', {
-                headers: { 'Authorization': `Bearer ${adminPassword}` }
+                headers: { 'Authorization': `Bearer ${sToken}` }
             });
             if (res.ok) {
                 const data = await res.json();
                 if (data.active_token) {
-                    setActiveToken(data.active_token);
-                    setDraftToken(prev => prev === '' ? data.active_token : prev);
+                    setActivePassphrase(data.active_token);
+                    setDraftPassphrase(prev => prev === '' ? data.active_token : prev);
                 }
             }
         } catch (e) {
-            console.error("Failed to fetch admin token", e);
+            console.error("Failed to fetch initial passphrase", e);
         }
     };
 
-    const fetchStats = async () => {
+    const fetchStats = async (sToken: string = adminSessionToken) => {
+        if (!sToken) return;
         try {
             const res = await fetch(HEALTH_ENDPOINT).catch(() => new Response(JSON.stringify({ soniox_connected: false, active_clients: 0, soniox_active: false }), { status: 503 }));
             if (!res.ok) throw new Error("Server offline");
@@ -83,9 +113,10 @@ export default function AdminApp() {
     };
 
     const fetchAudioDevices = async () => {
+        if (!adminSessionToken) return;
         try {
             const res = await fetch('/api/admin/audio-devices', {
-                headers: { 'Authorization': `Bearer ${adminPassword}` }
+                headers: { 'Authorization': `Bearer ${adminSessionToken}` }
             });
             if (res.ok) {
                 const data = await res.json();
@@ -117,33 +148,33 @@ export default function AdminApp() {
     };
 
     useEffect(() => {
-        if (!isAuthenticated) return;
-        const interval = setInterval(fetchStats, 5000); // Poll health stats
+        if (!isAuthenticated || !adminSessionToken) return;
+        const interval = setInterval(() => fetchStats(adminSessionToken), 5000); // Poll health stats
         fetchAudioDevices();
         return () => clearInterval(interval);
-    }, [isAuthenticated]);
+    }, [isAuthenticated, adminSessionToken]);
 
-    const generateRandomToken = () => {
+    const generateRandomPassphrase = () => {
         const adj = WORD_BANK_ADJ[Math.floor(Math.random() * WORD_BANK_ADJ.length)];
         const noun = WORD_BANK_NOUNS[Math.floor(Math.random() * WORD_BANK_NOUNS.length)];
         const num = Math.floor(Math.random() * 99) + 1;
-        setDraftToken(`${adj}-${noun}-${num}`);
+        setDraftPassphrase(`${adj}-${noun}-${num}`);
     };
 
-    const saveToken = async () => {
+    const savePassphrase = async () => {
         setSaveStatus('saving');
         try {
             const res = await fetch(API_ENDPOINT, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${adminPassword}`,
+                    'Authorization': `Bearer ${adminSessionToken}`,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ new_token: draftToken })
+                body: JSON.stringify({ new_token: draftPassphrase })
             });
             if (res.ok) {
                 setSaveStatus('saved');
-                setActiveToken(draftToken);
+                setActivePassphrase(draftPassphrase);
                 setTimeout(() => setSaveStatus('idle'), 2000);
             } else {
                 setSaveStatus('error');
@@ -170,8 +201,13 @@ export default function AdminApp() {
                         value={adminPassword}
                         onChange={(e) => setAdminPassword(e.target.value)}
                         placeholder="Enter Admin Password"
-                        className="w-full p-3 mb-6 bg-slate-900/50 text-white border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500 transition-all"
+                        className="w-full p-3 mb-4 bg-slate-900/50 text-white border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500 transition-all"
                     />
+                    {loginError && (
+                        <div className="mb-4 text-rose-400 text-sm font-medium text-center">
+                            {loginError}
+                        </div>
+                    )}
                     <button className="w-full bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-400 hover:to-blue-500 text-white font-medium py-3 rounded-xl shadow-lg shadow-indigo-500/20 transition-all transform hover:scale-[1.02]">
                         Authenticate
                     </button>
@@ -248,31 +284,31 @@ export default function AdminApp() {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Token Management */}
+                    {/* Passphrase Management */}
                     <div className="bg-slate-800/40 backdrop-blur-xl p-8 rounded-2xl shadow-xl border border-slate-700/50">
-                        <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Session Token Manager</h3>
+                        <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Passphrase Manager</h3>
                         <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-2xl">
-                            This token securely gates the public broadcast. Clients must enter this token to receive the translated audio streams. Generating a new token will disconnect all existing connections.
+                            This passphrase securely gates the public broadcast. Clients must enter this passphrase to receive the translated audio streams. Applying a new passphrase will disconnect all existing connections.
                         </p>
 
                         <div className="flex flex-col gap-4">
                             <input
                                 type="text"
-                                value={draftToken}
-                                onChange={(e) => setDraftToken(e.target.value)}
+                                value={draftPassphrase}
+                                onChange={(e) => setDraftPassphrase(e.target.value)}
                                 disabled={!serverReachable}
                                 className={`w-full bg-slate-900/50 border border-slate-700/50 p-4 rounded-xl text-xl text-center tracking-widest text-emerald-400 font-mono shadow-inner focus:outline-none focus:border-indigo-500 transition-colors ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
                             />
                             <div className="flex gap-4 w-full">
                                 <button
-                                    onClick={generateRandomToken}
+                                    onClick={generateRandomPassphrase}
                                     disabled={!serverReachable}
                                     className={`px-6 py-3 flex-1 bg-slate-700/50 ${serverReachable ? 'hover:bg-slate-600' : ''} border border-slate-600/50 rounded-xl font-medium transition-colors text-slate-200 ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
-                                    Generate Token
+                                    Generate Passphrase
                                 </button>
                                 <button
-                                    onClick={saveToken}
+                                    onClick={savePassphrase}
                                     disabled={!serverReachable}
                                     className={`px-8 py-3 flex-1 rounded-xl font-medium transition-all shadow-lg min-w-[140px] border border-transparent ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${saveStatus === 'idle' ? (serverReachable ? 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-600') + ' shadow-indigo-500/25 text-white' :
                                         saveStatus === 'saving' ? 'bg-indigo-500 text-white animate-pulse' :
@@ -287,13 +323,13 @@ export default function AdminApp() {
                                 </button>
                             </div>
                             <div className="text-center text-sm font-medium text-slate-400 mt-2">
-                                Current token: {activeToken ? (
-                                    <span className="text-indigo-400 italic font-mono px-2">{activeToken}</span>
+                                Current passphrase: {activePassphrase ? (
+                                    <span className="text-indigo-400 italic font-mono px-2">{activePassphrase}</span>
                                 ) : (
                                     <span className="relative group cursor-default text-slate-500 italic font-mono px-2">
                                         Initializing...
                                         <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-700 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
-                                            Cannot fetch token. The server may be offline.
+                                            Cannot fetch passphrase. The server may be offline.
                                         </span>
                                     </span>
                                 )}
@@ -322,12 +358,12 @@ export default function AdminApp() {
                                 ))}
                             </select>
                         </div>
-                        <AudioVisualizer wsEndpoint={`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/admin/audio`} adminPassword={adminPassword} />
+                        <AudioVisualizer wsEndpoint={`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/admin/audio`} adminSessionToken={adminSessionToken} />
                     </div>
                 </div>
 
                 {/* Live Transcription Monitor */}
-                <LiveTranscription sessionToken={activeToken} />
+                <LiveTranscription sessionToken={activePassphrase} />
 
             </div>
         </div>
