@@ -293,7 +293,7 @@ export default function AdminApp() {
                             </p>
 
                             {/* Current Passphrase Prominent Display */}
-                            <div className="mb-8 p-6 bg-slate-900/60 rounded-xl border border-slate-700/50 shadow-inner text-center">
+                            <div className="mb-2 p-6 bg-slate-900/60 rounded-xl border border-slate-700/50 shadow-inner text-center">
                                 <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Active Public Passphrase</h4>
                                 {activePassphrase ? (
                                     <div className="text-3xl font-mono font-bold text-emerald-400 tracking-wider">
@@ -311,7 +311,7 @@ export default function AdminApp() {
                         </div>
 
                         {/* Editor Section Demoted & Inline */}
-                        <div className="mt-2">
+                        <div className="mt-0">
                             <h4 className="text-xs font-medium text-slate-400 mb-2 uppercase tracking-wider">Change Passphrase</h4>
                             <div className="flex items-center gap-2">
                                 <input
