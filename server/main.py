@@ -362,7 +362,11 @@ async def get_audio_devices(_=Depends(verify_admin)):
     ]
     devices.sort(key=lambda x: x["index"])
     
-    return {"devices": devices, "active_device_index": session_state.audio_device_index}
+    return {
+        "devices": devices, 
+        "active_device_index": session_state.audio_device_index,
+        "active_channels": session_state.audio_device_channels
+    }
 
 class AudioDeviceUpdateReq(BaseModel):
     device_index: Optional[int] = None
@@ -417,7 +421,11 @@ async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)
         audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
     )
     
-    return {"status": "success", "active_device_index": session_state.audio_device_index}
+    return {
+        "status": "success", 
+        "active_device_index": session_state.audio_device_index,
+        "active_channels": session_state.audio_device_channels
+    }
     
 @app.websocket("/ws/admin/audio")
 async def admin_audio_viz(websocket: WebSocket):

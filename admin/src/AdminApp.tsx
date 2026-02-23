@@ -37,6 +37,7 @@ export default function AdminApp() {
 
     const [audioDevices, setAudioDevices] = useState<{ index: number, name: string }[]>([]);
     const [selectedAudioDevice, setSelectedAudioDevice] = useState<number | ''>('');
+    const [activeChannels, setActiveChannels] = useState(1);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -140,6 +141,7 @@ export default function AdminApp() {
                 const data = await res.json();
                 setAudioDevices(data.devices || []);
                 setSelectedAudioDevice(data.active_device_index !== null ? data.active_device_index : '');
+                setActiveChannels(data.active_channels || 1);
             }
         } catch (e) {
             console.error("Failed to fetch audio devices", e);
@@ -152,7 +154,7 @@ export default function AdminApp() {
         setSelectedAudioDevice(value === '' ? '' : parseInt(value, 10));
 
         try {
-            await fetch('/api/admin/audio-device', {
+            const res = await fetch('/api/admin/audio-device', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -160,6 +162,10 @@ export default function AdminApp() {
                 },
                 body: JSON.stringify({ device_index: newDeviceIndex })
             });
+            if (res.ok) {
+                const data = await res.json();
+                setActiveChannels(data.active_channels || 1);
+            }
         } catch (e) {
             console.error("Failed to update audio device", e);
         }
@@ -387,7 +393,11 @@ export default function AdminApp() {
                                 ))}
                             </select>
                         </div>
-                        <AudioVisualizer wsEndpoint={`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/admin/audio`} adminSessionToken={adminSessionToken} />
+                        <AudioVisualizer
+                            wsEndpoint={`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/admin/audio`}
+                            adminSessionToken={adminSessionToken}
+                            numChannels={activeChannels}
+                        />
                     </div>
                 </div>
 

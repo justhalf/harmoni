@@ -5,28 +5,22 @@
  * normalizes to Float32 for the Web Audio API, and renders a live frequency graph
  * using AnalyserNode + Canvas.
  *
- * Key design decisions:
- * - Silent gain node: Audio is routed through a GainNode with gain=0 to prevent
- *   audible playback while still feeding data to the AnalyserNode for visualization.
- * - Gapless scheduling: Packets are scheduled sequentially using nextStartTime to
- *   prevent gaps or overlaps. A drift correction mechanism caps the future buffer
- *   at 300ms and snaps back to real-time if the schedule falls too far behind.
- * - Canvas resolution sync: Internal canvas dimensions are synced to CSS dimensions
- *   on every frame to prevent visual squishing from resolution mismatch.
- * - Reconnect on close: The WebSocket auto-reconnects every 2 seconds. On React
- *   unmount, onclose is nullified to prevent zombie reconnect loops.
+ * Stereo-aware: If numChannels=2, it splits interleaved data and displays two
+ * separate spectral plots for Left and Right channels.
  */
 import { useEffect, useRef, useState } from 'react';
 
 interface VisualizerProps {
     wsEndpoint: string;
     adminSessionToken: string;
+    numChannels: number;
 }
 
-export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: VisualizerProps) {
+export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChannels }: VisualizerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
-    const analyserRef = useRef<AnalyserNode | null>(null);
+    const analyserLRef = useRef<AnalyserNode | null>(null);
+    const analyserRRef = useRef<AnalyserNode | null>(null);
     const [isRendering, setIsRendering] = useState(false);
 
     useEffect(() => {
@@ -35,23 +29,34 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
         let reconnectTimeout: ReturnType<typeof setTimeout>;
 
         const connect = () => {
-            // Scaffold Web Audio API context for raw PCM data stream from Queue B
+            // Scaffold Web Audio API context for raw PCM data stream (forced to 16kHz to match ingest)
             audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-            const analyser = audioCtx.createAnalyser();
-
-            analyser.fftSize = 256;
             audioCtxRef.current = audioCtx;
-            analyserRef.current = analyser;
 
-            // SILENT GAIN NODE: Route audio through the analyser but output at
-            // zero volume. This lets us visualize the spectrum without producing
-            // audible output. The connection chain is:
-            //   AudioBufferSource → AnalyserNode → GainNode(0) → AudioDestination
-            // This must be set up once per AudioContext, not per packet.
+            const analyserL = audioCtx.createAnalyser();
+            analyserL.fftSize = 256;
+            analyserLRef.current = analyserL;
+
             const silentNode = audioCtx.createGain();
             silentNode.gain.value = 0;
-            analyser.connect(silentNode);
             silentNode.connect(audioCtx.destination);
+
+            if (numChannels === 2) {
+                const analyserR = audioCtx.createAnalyser();
+                analyserR.fftSize = 256;
+                analyserRRef.current = analyserR;
+
+                const splitter = audioCtx.createChannelSplitter(2);
+                splitter.connect(analyserL, 0);
+                splitter.connect(analyserR, 1);
+
+                analyserL.connect(silentNode);
+                analyserR.connect(silentNode);
+                // The source will connect to the splitter
+            } else {
+                analyserRRef.current = null;
+                analyserL.connect(silentNode);
+            }
 
             ws = new WebSocket(wsEndpoint);
             ws.binaryType = "arraybuffer";
@@ -65,29 +70,46 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
 
             ws.onmessage = (event) => {
                 const ctx = audioCtxRef.current;
-                const activeAnalyser = analyserRef.current;
-                if (!ctx || !activeAnalyser) return;
+                if (!ctx || !analyserLRef.current) return;
 
-                // PCM Int16 → Float32 normalization for Web Audio API
-                // Int16 range is [-32768, 32767], Float32 range is [-1.0, 1.0]
                 const pcmData = new Int16Array(event.data);
-                const floatData = new Float32Array(pcmData.length);
-                for (let i = 0; i < pcmData.length; i++) {
-                    floatData[i] = pcmData[i] / 32768.0;
-                }
+                const totalSamples = pcmData.length;
+                const samplesPerChannel = totalSamples / numChannels;
 
-                const audioBuffer = ctx.createBuffer(1, floatData.length, ctx.sampleRate);
-                audioBuffer.copyToChannel(floatData, 0);
+                const audioBuffer = ctx.createBuffer(numChannels, samplesPerChannel, ctx.sampleRate);
+
+                if (numChannels === 2) {
+                    const leftData = new Float32Array(samplesPerChannel);
+                    const rightData = new Float32Array(samplesPerChannel);
+                    for (let i = 0; i < samplesPerChannel; i++) {
+                        leftData[i] = pcmData[i * 2] / 32768.0;
+                        rightData[i] = pcmData[i * 2 + 1] / 32768.0;
+                    }
+                    audioBuffer.copyToChannel(leftData, 0);
+                    audioBuffer.copyToChannel(rightData, 1);
+                } else {
+                    const monoData = new Float32Array(totalSamples);
+                    for (let i = 0; i < totalSamples; i++) {
+                        monoData[i] = pcmData[i] / 32768.0;
+                    }
+                    audioBuffer.copyToChannel(monoData, 0);
+                }
 
                 const source = ctx.createBufferSource();
                 source.buffer = audioBuffer;
-                source.connect(activeAnalyser);
 
-                // GAPLESS PLAYBACK SCHEDULING with drift correction:
-                // Schedule each packet to play immediately after the previous one.
-                // If we fall behind (nextStartTime < currentTime), snap to now.
-                // If we're scheduled too far in the future (>300ms ahead), snap back
-                // to 50ms ahead to clear the accumulated latency backlog instantly.
+                if (numChannels === 2) {
+                    // Splitter was defined in connect(), but nodes are per-packet? 
+                    // No, the constant topology is better. Let's find the splitter.
+                    // Actually, we can just create a splitter per packet or use a persistent one.
+                    const splitter = ctx.createChannelSplitter(2);
+                    splitter.connect(analyserLRef.current, 0);
+                    if (analyserRRef.current) splitter.connect(analyserRRef.current, 1);
+                    source.connect(splitter);
+                } else {
+                    source.connect(analyserLRef.current);
+                }
+
                 if (nextStartTime < ctx.currentTime) {
                     nextStartTime = ctx.currentTime;
                 } else if (nextStartTime > ctx.currentTime + 0.3) {
@@ -100,14 +122,10 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
 
             ws.onclose = () => {
                 setIsRendering(false);
-                // Auto-reconnect every 2 seconds if the server drops or is offline
                 reconnectTimeout = setTimeout(connect, 2000);
             };
 
-            ws.onerror = () => {
-                // Silently drop connection errors (expected when server is down)
-                ws.close(); // Force the close handler to trigger reconnect
-            };
+            ws.onerror = () => ws.close();
         };
 
         connect();
@@ -115,14 +133,12 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
         return () => {
             clearTimeout(reconnectTimeout);
             if (ws) {
-                // Nullify onclose to prevent reconnect loop during React unmount.
-                // Without this, the cleanup triggers onclose which triggers connect().
                 ws.onclose = null;
                 ws.close();
             }
             if (audioCtx) audioCtx.close();
         };
-    }, [wsEndpoint, adminSessionToken]);
+    }, [wsEndpoint, adminSessionToken, numChannels]);
 
     useEffect(() => {
         if (!canvasRef.current) return;
@@ -136,98 +152,102 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
         const draw = () => {
             animationId = requestAnimationFrame(draw);
 
-            // Sync internal canvas resolution to CSS element size to prevent squishing
             if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
                 canvas.width = canvas.clientWidth;
                 canvas.height = canvas.clientHeight;
             }
 
-            // Always draw background
-            canvasCtx.fillStyle = 'rgb(17, 24, 39)'; // Tailwind gray-900 (background)
+            canvasCtx.fillStyle = 'rgb(17, 24, 39)';
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Only draw the frequency data overlay if actively connected
-            if (isRendering && analyserRef.current) {
-                const analyser = analyserRef.current;
-                const bufferLength = analyser.frequencyBinCount;
-                const dataArray = new Uint8Array(bufferLength);
+            const xAxisY = canvas.height - 30;
+            const plotHeight = xAxisY;
 
-                analyser.getByteFrequencyData(dataArray);
+            if (isRendering && analyserLRef.current) {
+                const drawChannel = (analyser: AnalyserNode, xOffset: number, width: number, labelPrefix: string) => {
+                    const bufferLength = analyser.frequencyBinCount;
+                    const dataArray = new Uint8Array(bufferLength);
+                    analyser.getByteFrequencyData(dataArray);
 
-                // Draw Frequency Line Graph
-                canvasCtx.lineWidth = 2;
-                canvasCtx.strokeStyle = 'rgb(110, 231, 183)'; // Tailwind emerald-300
-                canvasCtx.beginPath();
+                    canvasCtx.lineWidth = 2;
+                    canvasCtx.strokeStyle = labelPrefix === 'L' ? 'rgb(110, 231, 183)' : 'rgb(96, 165, 250)'; // Emerald vs Blue
+                    canvasCtx.beginPath();
 
-                const sliceWidth = canvas.width / bufferLength;
-                let x = 0;
+                    const sliceWidth = width / bufferLength;
+                    let x = xOffset;
 
-                for (let i = 0; i < bufferLength; i++) {
-                    const v = dataArray[i] / 255.0;
-                    // Leave bottom 30px for labels
-                    const plotHeight = canvas.height - 30;
-                    const y = plotHeight - (v * plotHeight);
-
-                    if (i === 0) {
-                        canvasCtx.moveTo(x, y);
-                    } else {
-                        canvasCtx.lineTo(x, y);
+                    for (let i = 0; i < bufferLength; i++) {
+                        const v = dataArray[i] / 255.0;
+                        const y = plotHeight - (v * plotHeight);
+                        if (i === 0) canvasCtx.moveTo(x, y);
+                        else canvasCtx.lineTo(x, y);
+                        x += sliceWidth;
                     }
+                    canvasCtx.stroke();
 
-                    x += sliceWidth;
+                    // Labels for this channel
+                    canvasCtx.fillStyle = 'rgb(156, 163, 175)';
+                    canvasCtx.font = '9px Roboto, sans-serif';
+                    canvasCtx.textAlign = 'center';
+
+                    const labelFreqs = [0, 8000];
+                    labelFreqs.forEach(freq => {
+                        const xPos = xOffset + (freq / 8000) * width;
+                        canvasCtx.beginPath();
+                        canvasCtx.moveTo(xPos, xAxisY);
+                        canvasCtx.lineTo(xPos, xAxisY + 4);
+                        canvasCtx.stroke();
+
+                        let text = freq === 0 ? `0` : `8k`;
+                        if (numChannels === 2) text = `${labelPrefix} ${text}`;
+
+                        let finalX = xPos;
+                        if (freq === 0) finalX += 8;
+                        if (freq === 8000) finalX -= 10;
+
+                        canvasCtx.fillText(text, finalX, xAxisY + 15);
+                    });
+                };
+
+                if (numChannels === 2 && analyserRRef.current) {
+                    drawChannel(analyserLRef.current, 0, canvas.width / 2, 'L');
+                    drawChannel(analyserRRef.current, canvas.width / 2, canvas.width / 2, 'R');
+                } else {
+                    drawChannel(analyserLRef.current, 0, canvas.width, '');
+                    // Intermediate ticks for mono only to match user's current 0-1-2-4-8 display
+                    [1000, 2000, 4000].forEach(freq => {
+                        const xPos = (freq / 8000) * canvas.width;
+                        canvasCtx.fillText(`${freq / 1000}k`, xPos, xAxisY + 15);
+                    });
                 }
-
-                canvasCtx.stroke();
             }
 
-            // Always Draw X-Axis and Labels
-            canvasCtx.strokeStyle = 'rgb(75, 85, 99)'; // Tailwind gray-600
-            canvasCtx.fillStyle = 'rgb(156, 163, 175)'; // Tailwind gray-400
-            canvasCtx.font = '10px Roboto, sans-serif';
-            canvasCtx.textAlign = 'center';
+            // Always Draw X-Axis
+            canvasCtx.strokeStyle = 'rgb(75, 85, 99)';
             canvasCtx.beginPath();
-
-            const xAxisY = canvas.height - 30;
             canvasCtx.moveTo(0, xAxisY);
             canvasCtx.lineTo(canvas.width, xAxisY);
+            if (numChannels === 2) {
+                // Vertical divider
+                canvasCtx.moveTo(canvas.width / 2, 0);
+                canvasCtx.lineTo(canvas.width / 2, xAxisY);
+            }
             canvasCtx.stroke();
-
-            // Web Audio API sampleRate is 16000, Nyquist is 8000
-            const nyquist = 8000;
-            // Draw labels for 0, 1k, 2k, 4k, 8k
-            const labelFreqs = [0, 1000, 2000, 4000, 8000];
-
-            labelFreqs.forEach(freq => {
-                const xPos = (freq / nyquist) * canvas.width;
-
-                canvasCtx.beginPath();
-                canvasCtx.moveTo(xPos, xAxisY);
-                canvasCtx.lineTo(xPos, xAxisY + 5);
-                canvasCtx.stroke();
-
-                const labelText = freq >= 1000 ? `${freq / 1000}k` : `${freq}`;
-                let finalX = xPos;
-                if (freq === 8000) finalX = xPos - 10;
-                if (freq === 0) finalX = xPos + 4;
-                canvasCtx.fillText(labelText, finalX, xAxisY + 20);
-            });
         };
 
         draw();
 
-        return () => {
-            cancelAnimationFrame(animationId);
-        };
-    }, [isRendering]);
+        return () => cancelAnimationFrame(animationId);
+    }, [isRendering, numChannels]);
 
     return (
         <div className="w-full bg-slate-800/50 backdrop-blur-md rounded-xl border border-slate-700/50 overflow-hidden flex flex-col shadow-2xl">
             <div className="px-6 py-3 bg-slate-800/80 border-b border-slate-700/50 flex justify-between items-center text-xs font-medium text-slate-400 select-none">
                 <span className="flex items-center gap-2">
                     <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
                     </svg>
-                    Web Audio API (AnalyserNode)
+                    {numChannels === 2 ? 'Stereo' : 'Mono'} Spectrum Analysis
                 </span>
                 <span>
                     {isRendering ? (
@@ -236,7 +256,7 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                             </span>
-                            <span className="text-emerald-400 font-semibold tracking-wider">LIVE</span>
+                            <span className="text-emerald-400 font-semibold tracking-wider uppercase text-[10px]">Active</span>
                         </div>
                     ) : (
                         <span className="text-slate-500 italic">Awaiting Data...</span>
