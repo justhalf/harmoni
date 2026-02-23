@@ -106,6 +106,9 @@ export default function App() {
     const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
     const [topAlpha, setTopAlpha] = useState(1);
 
+    const STORAGE_KEY = 'harmoni-transcription-v1';
+    const EXPIRY_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+
     // Dark Mode Global State
     const [isDarkMode, setIsDarkMode] = useState(() => {
         // Hydrate from localStorage or default to system preference
@@ -321,6 +324,34 @@ export default function App() {
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
     }, [activePopover]);
+
+    // Initial load from localStorage
+    useEffect(() => {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try {
+                const { expiry, spans: savedSpans } = JSON.parse(saved);
+                if (Date.now() < expiry) {
+                    setSpans(savedSpans);
+                } else {
+                    localStorage.removeItem(STORAGE_KEY);
+                }
+            } catch (e) {
+                console.error("Failed to parse saved transcription", e);
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        }
+    }, []);
+
+    // Save to localStorage on change
+    useEffect(() => {
+        if (spans.length === 0) return;
+        const data = {
+            expiry: Date.now() + EXPIRY_MS,
+            spans: spans
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }, [spans]);
 
 
 

@@ -102,6 +102,9 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
     const isAutoScrolling = useRef(false);
     const scrollTimeoutRef = useRef<number | null>(null);
 
+    const STORAGE_KEY = 'harmoni-transcription-v1';
+    const EXPIRY_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+
     // Fade-out parameters
     const [topAlpha, setTopAlpha] = useState(1);
 
@@ -246,6 +249,34 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [activePopover]);
+
+    // Initial load from localStorage
+    useEffect(() => {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try {
+                const { expiry, spans: savedSpans } = JSON.parse(saved);
+                if (Date.now() < expiry) {
+                    setSpans(savedSpans);
+                } else {
+                    localStorage.removeItem(STORAGE_KEY);
+                }
+            } catch (e) {
+                console.error("Failed to parse saved transcription", e);
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        }
+    }, []);
+
+    // Save to localStorage on change
+    useEffect(() => {
+        if (spans.length === 0) return;
+        const data = {
+            expiry: Date.now() + EXPIRY_MS,
+            spans: spans
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }, [spans]);
     const [reconnectTrigger, setReconnectTrigger] = useState(0);
     const reconnectTimeoutRef = useRef<number | null>(null);
 
