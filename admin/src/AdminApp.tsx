@@ -1,3 +1,17 @@
+/**
+ * AdminApp.tsx — GPBB Harmoni Admin Dashboard
+ *
+ * This is the top-level admin component. It handles:
+ * - Admin authentication via POST /api/admin/login (session token flow)
+ * - Real-time server health polling (5-second interval)
+ * - Passphrase management (generate, edit, apply + kick clients)
+ * - Audio device selection (triggering cooperative restart on the server)
+ * - Soniox translation toggle with optimistic UI
+ *
+ * Security note (Lesson #11): The login flow MUST await a 200 OK from the
+ * server before setting isAuthenticated=true. A previous bug allowed any
+ * non-empty password to bypass authentication entirely.
+ */
 import React, { useState, useEffect } from 'react';
 import AudioVisualizer from './components/AudioVisualizer';
 import LiveTranscription from './components/LiveTranscription';
@@ -29,7 +43,9 @@ export default function AdminApp() {
         setLoginError('');
         if (adminPassword.trim() !== "") {
             try {
-                // Post to the new login endpoint that issues session tokens
+                // AUTH FLOW (Lesson #11): We POST the password to the server and
+                // only grant access on a 200 OK with a valid session token. The
+                // raw password is cleared from React state immediately after.
                 const res = await fetch('/api/admin/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -42,11 +58,12 @@ export default function AdminApp() {
                         const sToken = data.admin_session_token;
                         setAdminSessionToken(sToken);
 
-                        // CRITICAL: Clear the raw password from memory entirely
+                        // SECURITY: Clear the raw password from React state. From this
+                        // point forward, only the opaque session token is used for auth.
                         setAdminPassword('');
 
                         setIsAuthenticated(true);
-                        // Start polling/fetching immediately with the new session token
+                        // Immediately fetch dashboard data with the new token
                         fetchStats(sToken);
                         fetchInitialPassphrase(sToken);
                     } else {
@@ -95,7 +112,8 @@ export default function AdminApp() {
 
     const toggleSoniox = async () => {
         const newActiveState = !stats.active;
-        // Optimistic UI update
+        // OPTIMISTIC UI: Update the toggle visually before the server responds.
+        // If the request fails, the next health poll (5s) will correct the state.
         setStats(prev => ({ ...prev, active: newActiveState }));
         try {
             await fetch('/api/admin/soniox/toggle', {

@@ -72,7 +72,7 @@ export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }:
                             onChange={(e) => setInputVal(e.target.value)}
                             disabled={serverStatus !== 'online'}
                             className={`w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black ${serverStatus !== 'online' ? 'opacity-50 cursor-not-allowed bg-gray-100' : ''}`}
-                            placeholder="e.g. blue-ocean-42"
+                            placeholder="Enter passphrase"
                             required
                         />
                     </div>

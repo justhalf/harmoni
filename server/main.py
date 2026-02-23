@@ -1,6 +1,19 @@
+"""FastAPI server for GPBB Harmoni live translation.
+
+Architecture overview:
+  - Audio ingest task reads from a local microphone and pushes PCM chunks into two queues.
+  - Soniox translation task (toggled by admin) pulls from Queue A and streams to the
+    Soniox API, broadcasting transcription tokens to all connected WebSocket clients.
+  - Audio visualizer task pulls from Queue B and broadcasts raw PCM to admin dashboards.
+  - Admin endpoints are protected by session tokens issued via POST /api/admin/login.
+  - Public WebSocket clients authenticate with the session passphrase (admin_token).
+
+See lessons.md for detailed bug history and design rationale.
+"""
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Header
 import pyaudio
 from typing import Optional
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import time
@@ -41,15 +54,54 @@ for logger_name in ("uvicorn", "uvicorn.error"):
 logger = logging.getLogger("harmoni")
 logger.setLevel(logging.INFO)
 
-app = FastAPI(title="Soniox Translation Broadcast Hub")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # Tighten in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manages server lifecycle: startup initialization and graceful shutdown.
+    
+    Startup (before yield):
+      Creates audio queues and starts background tasks for audio ingest and
+      visualization broadcasting.
+    
+    Shutdown (after yield):
+      Uses cooperative shutdown for audio ingest (Lesson #1) to avoid segfaults,
+      then cancels the remaining tasks.
+    """
+    # === STARTUP ===
+    # Queue A: Soniox translation. maxsize=100 provides ~6 seconds of buffering
+    # at 16kHz with 1024-sample chunks.
+    app.state.audio_queue_a = asyncio.Queue(maxsize=100)
+    # Queue B: Admin visualizer. maxsize=1 ensures only the latest frame is buffered,
+    # providing zero-latency visualization. See Lesson #2.
+    app.state.audio_queue_b = asyncio.Queue(maxsize=1)
+    
+    app.state.audio_ingest_task = asyncio.create_task(
+        audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
+    )
+    
+    app.state.audio_viz_task = asyncio.create_task(
+        audio_viz_broadcaster_task(app.state.audio_queue_b, manager)
+    )
+    
+    # The soniox_task is now triggered manually via the Admin Dashboard
+    app.state.soniox_task = None
+    
+    yield
+    
+    # === SHUTDOWN ===
+    # Use cooperative shutdown for audio ingest (Lesson #1): set the flag and
+    # await the task's natural exit instead of cancelling it.
+    session_state.stop_audio_ingest = True
+    if getattr(app.state, "audio_ingest_task", None):
+        try:
+            await app.state.audio_ingest_task
+        except Exception:
+            pass
+    
+    # Viz and Soniox tasks don't wrap blocking C calls, so cancel() is safe.
+    if getattr(app.state, "audio_viz_task", None):
+        app.state.audio_viz_task.cancel()
+    if getattr(app.state, "soniox_task", None):
+        app.state.soniox_task.cancel()
 
 manager = ConnectionManager()
 session_state = ActiveSession()
@@ -70,42 +122,31 @@ async def audio_viz_broadcaster_task(audio_queue_b: asyncio.Queue, manager: Conn
             logger.error(f"Broadcaster task error: {e}")
             break
 
-@app.on_event("startup")
-async def startup_event():
-    # Start the async audio and soniox tasks in the background
-    app.state.audio_queue_a = asyncio.Queue(maxsize=100) # Soniox Queue
-    app.state.audio_queue_b = asyncio.Queue(maxsize=1) # Admin Viz Queue (1 frame = 0 latency backlog)
-    
-    app.state.audio_ingest_task = asyncio.create_task(
-        audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
-    )
-    
-    app.state.audio_viz_task = asyncio.create_task(
-        audio_viz_broadcaster_task(app.state.audio_queue_b, manager)
-    )
-    
-    # The soniox_task is now triggered manually via the Admin Dashboard
-    app.state.soniox_task = None
+app = FastAPI(title="Soniox Translation Broadcast Hub", lifespan=lifespan)
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Graceful audio ingest shutdown
-    session_state.stop_audio_ingest = True
-    if getattr(app.state, "audio_ingest_task", None):
-        try:
-            await app.state.audio_ingest_task
-        except Exception:
-            pass
-            
-    if getattr(app.state, "audio_viz_task", None):
-        app.state.audio_viz_task.cancel()
-    if getattr(app.state, "soniox_task", None):
-        app.state.soniox_task.cancel()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Tighten in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Public Endpoints ---
 
 @app.websocket("/ws/listen")
 async def websocket_endpoint(websocket: WebSocket):
+    """Public WebSocket endpoint for streaming translation tokens.
+    
+    Auth flow:
+    1. Client connects and sends a JSON message with {token, is_admin} within 5 seconds.
+    2. Token is validated against session_state.admin_token (the public passphrase).
+    3. On success, the connection is registered and receives an initial status push.
+    4. On failure, close with code 1008 (Policy Violation) to suppress client reconnect.
+    
+    The connection then stays open indefinitely, receiving broadcast messages from
+    soniox_translation_task. The receive_text() loop exists solely to detect disconnects.
+    """
     await websocket.accept()
     try:
         auth_data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
@@ -116,15 +157,15 @@ async def websocket_endpoint(websocket: WebSocket):
     token = auth_data.get("token")
     is_admin = auth_data.get("is_admin", False)
 
-    # Authenticate token against active daily session token
     if not token or token != session_state.admin_token:
-        # FastAPI handles WS close gracefully
         await websocket.close(code=1008, reason="Invalid session token.")
         return
 
     await manager.connect(websocket, is_admin)
 
-    # Push initial status so the client immediately knows Stand By vs Live
+    # Push initial status so the client immediately knows whether Soniox is active.
+    # This prevents the client from showing "Stand By" briefly before the first
+    # broadcast arrives.
     try:
         await websocket.send_json({"type": "status", "soniox_active": session_state.soniox_active})
     except Exception:
@@ -132,7 +173,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # Keep connection alive, listen for client drops
+            # Keep connection alive; this loop only serves to detect disconnects.
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, is_admin)
@@ -170,6 +211,20 @@ class AdminLoginReq(BaseModel):
 
 @app.post("/api/admin/login")
 async def admin_login(req: AdminLoginReq):
+    """Authenticate with the server-side ADMIN_PASSWORD and receive a session token.
+    
+    Uses secrets.compare_digest() for timing-safe string comparison to prevent
+    timing attacks that could leak password length or character matches.
+    
+    The returned session token is a cryptographically random URL-safe string
+    (secrets.token_urlsafe(32) = 43 characters). Multiple concurrent sessions
+    are supported (e.g., two admin browser tabs).
+    
+    Security note (Lesson #11): The frontend MUST send the actual password to
+    this endpoint and wait for a 200 OK before granting dashboard access.
+    Previously, the frontend simply checked if the password field was non-empty
+    and set isAuthenticated=true, completely bypassing server validation.
+    """
     if secrets.compare_digest(req.password, ADMIN_PASSWORD):
         new_session_token = secrets.token_urlsafe(32)
         session_state.admin_sessions.add(new_session_token)
@@ -231,9 +286,26 @@ async def update_token(req: TokenUpdateReq, _=Depends(verify_admin)):
     
 @app.get("/api/admin/audio-devices")
 async def get_audio_devices(_=Depends(verify_admin)):
+    """List available audio input devices with deduplication.
+    
+    Windows exposes each physical microphone through multiple host APIs (WASAPI,
+    DirectSound, MME, WDM-KS), each as a separate PyAudio device index. This
+    endpoint deduplicates them using a two-step algorithm:
+    
+    1. PRIORITY SCORING: Each host API gets a score. WDM-KS is excluded entirely
+       (score -1) because it exposes raw audio pins not suitable for application use.
+       DirectSound/MME are preferred (score 3) over WASAPI (score 2) for compatibility.
+    
+    2. NAME GROUPING: Devices are grouped by the first 31 characters of their name.
+       This 31-char boundary matches MME's name truncation limit — MME always truncates
+       device names to 31 chars, so a WASAPI device named "Microphone (Realtek Audio)"
+       and its MME counterpart "Microphone (Realtek Audio)" will share the same group key.
+       Only the highest-scoring entry per group is kept.
+    
+    See Lesson #3 for more details.
+    """
     p = pyaudio.PyAudio()
     
-    # Get host APIs mapping
     host_apis = {}
     for i in range(p.get_host_api_count()):
         try:
@@ -242,12 +314,11 @@ async def get_audio_devices(_=Depends(verify_admin)):
         except:
             pass
             
-    # Priority for deduplication: DirectSound = MME > WASAPI. Skip WDM-KS (raw pins).
     api_scores = {
         "Windows WASAPI": 2,
         "Windows DirectSound": 3,
         "MME": 3,
-        "Windows WDM-KS": -1
+        "Windows WDM-KS": -1  # Excluded: raw audio pins
     }
     
     unique_devices = {}
@@ -260,11 +331,11 @@ async def get_audio_devices(_=Depends(verify_admin)):
                 api_name = host_apis.get(api_index, "Unknown")
                 score = api_scores.get(api_name, 0)
                 
-                if score < 0: # Skip WDM-KS entirely
+                if score < 0:
                     continue
                     
                 name = dev.get('name')
-                # MME truncates to 31 chars. Use first 31 chars to group identical devices across APIs
+                # Group by first 31 chars (MME truncation boundary)
                 group_key = name[:31]
                 
                 if group_key not in unique_devices or score > unique_devices[group_key]['score']:
@@ -298,9 +369,19 @@ class AudioDeviceUpdateReq(BaseModel):
 
 @app.post("/api/admin/audio-device")
 async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)):
+    """Change the active audio input device.
+    
+    COOPERATIVE RESTART SEQUENCE (Lesson #1):
+    1. Update session state with new device index and channel count.
+    2. Set stop_audio_ingest = True (cooperative shutdown signal).
+    3. Await the existing audio_ingest_task to finish naturally. This is critical
+       because the task may be in the middle of a blocking PyAudio stream.read()
+       call. Cancelling it would cause a segfault in the PortAudio C library.
+    4. Reset the flag, flush both queues, and start a new ingest task.
+    """
     session_state.audio_device_index = req.device_index
     
-    # Lookup the channel count so we can downmix properly
+    # Look up channel count for stereo downmix decision (Lesson #4)
     if req.device_index is not None:
         p = pyaudio.PyAudio()
         try:
@@ -312,26 +393,26 @@ async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)
     else:
         session_state.audio_device_channels = 1
     
-    # Restart audio ingest task safely
+    # Step 1: Signal cooperative shutdown
     session_state.stop_audio_ingest = True
     if getattr(app.state, "audio_ingest_task", None):
         try:
-            # Wait for C-level pyaudio blocking read to finish
+            # Step 2: Wait for the C-level blocking read to complete naturally
             await app.state.audio_ingest_task
         except Exception:
             pass
             
-    # Reset flag
+    # Step 3: Reset flag and flush queues for clean restart
     session_state.stop_audio_ingest = False
     
-    # Empty queues for clean restart
     while not app.state.audio_queue_a.empty():
         try: app.state.audio_queue_a.get_nowait()
         except: pass
     while not app.state.audio_queue_b.empty():
         try: app.state.audio_queue_b.get_nowait()
         except: pass
-        
+    
+    # Step 4: Start new ingest task with updated device
     app.state.audio_ingest_task = asyncio.create_task(
         audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
     )

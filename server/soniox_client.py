@@ -1,3 +1,19 @@
+"""Soniox real-time speech-to-text client with translation.
+
+Maintains a persistent connection to the Soniox API using the official AsyncSonioxClient.
+The architecture uses two concurrent coroutines (send_audio + receive_text) running via
+asyncio.gather inside an infinite retry loop with 5-second backoff.
+
+Key behaviors:
+  - Queue flush on connect: Stale audio chunks are discarded before starting a new
+    Soniox session to prevent sending old buffered audio that would produce out-of-date
+    transcriptions.
+  - Raw event forwarding: Soniox events are broadcast as-is (via model_dump) to all
+    connected WebSocket clients. The frontend is responsible for parsing token fields.
+  - Infinite retry: If the Soniox connection drops (network issues, API errors), the
+    task sleeps 5 seconds then reconnects automatically. This makes the system resilient
+    to transient Soniox outages.
+"""
 import asyncio
 import os
 import json
@@ -19,13 +35,25 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
     Maintains a single authenticated session to the Soniox Real-Time API using the official AsyncSonioxClient.
     Pulls binary audio off Queue A, sends it to Soniox, and broadcasts text tokens to all users.
     """
-    client = AsyncSonioxClient(api_key=SONIOX_API_KEY)
+    client = AsyncSonioxClient(
+        api_key=SONIOX_API_KEY,
+        api_base_url="https://api.jp.soniox.com/v1",
+        websocket_base_url="wss://stt-rt.jp.soniox.com/transcribe-websocket",
+    )
     
+    # Soniox STT configuration:
+    # - model "stt-rt-v4" is the real-time streaming model
+    # - language_hints=["id", "en"] with strict=False allows auto-detection
+    #   between Indonesian and English, while still accepting other languages
+    # - enable_endpoint_detection=True inserts <end> tokens at sentence boundaries
+    # - Translation is one-way: original language → English
+    # - num_channels is read from session state so stereo mics work natively
+    #   without audioop downmixing (Lesson #4, audioop removed in Python 3.13)
     config = RealtimeSTTConfig(
         model="stt-rt-v4",
         audio_format="pcm_s16le",
         sample_rate=16000,
-        num_channels=1,
+        num_channels=session.audio_device_channels,
         language_hints=["id", "en"],
         language_hints_strict=False,
         enable_endpoint_detection=True,
@@ -42,7 +70,9 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                 session.soniox_connected = True
                 logger.info("Connected to Soniox")
                 
-                # Flush existing old audio so we only send fresh live audio to Soniox
+                # QUEUE FLUSH: Discard any stale audio buffered while disconnected.
+                # Without this, reconnecting would send old audio to Soniox, producing
+                # out-of-date transcriptions before catching up to live audio.
                 while not audio_queue.empty():
                     try:
                         audio_queue.get_nowait()
@@ -83,7 +113,9 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                             logger.error(f"Error broadcasting from Soniox: {e}")
                             break
                             
-                # Run send and receive concurrently
+                # Run send and receive concurrently. If either coroutine exits
+                # (error, cancel, or session.finished), asyncio.gather returns
+                # and the outer while-True loop handles reconnection.
                 await asyncio.gather(
                     send_audio(),
                     receive_text()

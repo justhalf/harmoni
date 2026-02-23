@@ -1,3 +1,13 @@
+"""Data models and connection management for the Harmoni live translation server.
+
+Key design decisions:
+- ActiveSession is a singleton holding all mutable server state (audio config,
+  Soniox status, admin session tokens). It is NOT persisted; a server restart
+  resets all state.
+- ConnectionManager tracks three independent WebSocket pools: public clients,
+  admin dashboards, and admin audio visualizers. Each pool has independent
+  lifecycle management with dead-connection cleanup on every broadcast.
+"""
 from pydantic import BaseModel
 from typing import Optional, List, Set, Dict
 from fastapi import WebSocket
@@ -13,16 +23,29 @@ class TranslationToken(BaseModel):
     language: str
 
 class ActiveSession(BaseModel):
-    """Holds the securely generated active token for the day."""
-    admin_token: str = "blue-ocean-42" # Default hardcoded startup token
+    """Mutable singleton holding all server-side session state.
     
-    # Internal liveness stats
+    This model is NOT persisted. A server restart resets all fields to defaults.
+    The admin_token is the public passphrase that clients use to connect via WebSocket.
+    """
+    admin_token: str = "blue-ocean-42"  # Default startup passphrase; changed via admin UI
+    
+    # Liveness monitoring: audio_last_received_ts is compared against time.time()
+    # in the /health endpoint. If the gap exceeds 5 seconds, audio is considered dead.
     audio_last_received_ts: float = 0.0
     soniox_connected: bool = False
-    soniox_active: bool = False # Track if admin turned it on
+    soniox_active: bool = False  # True only when admin explicitly enables translation
     audio_device_index: Optional[int] = None
+    # Channel count is stored so audio_ingest can downmix stereo→mono for Soniox.
+    # See Lesson #4: Some USB mics report maxInputChannels > 1; Soniox expects mono PCM.
     audio_device_channels: int = 1
+    # Cooperative shutdown flag for audio_ingest_task. Setting this to True causes
+    # the ingest loop to break cleanly on the next iteration, avoiding segfaults
+    # from cancelling a blocking PyAudio C-level read. See Lesson #1.
     stop_audio_ingest: bool = False
+    # Set of opaque session tokens issued by POST /api/admin/login.
+    # Each token is a secrets.token_urlsafe(32) string. Multiple concurrent admin
+    # sessions are supported (e.g., two browser tabs).
     admin_sessions: Set[str] = set()
     
 @dataclass
@@ -61,11 +84,15 @@ class ConnectionManager:
             self.admin_viz_connections.remove(websocket)
 
     async def kick_unauthorized(self):
-        """Forcefully disconnect all standard client connections. (Admins are immune)"""
+        """Forcefully disconnect all standard client connections. Admins are immune.
+        
+        Uses WebSocket close code 1008 (Policy Violation). The client-side onclose
+        handler checks for code 1008 and suppresses auto-reconnect, instead clearing
+        the session token and returning to the passphrase prompt. See Lesson #8.
+        """
         dead_connections = set()
         for connection in self.active_connections:
             try:
-                # 1008 is the standard WebSocket code for Policy Violation
                 await connection.close(code=1008, reason="Token revoked")
             except Exception:
                 pass
@@ -76,7 +103,12 @@ class ConnectionManager:
         logger.info(f"Kicked {len(dead_connections)} clients. Active clients: 0")
 
     async def broadcast(self, message: dict):
-        """Fan-out to all connected clients and admins."""
+        """Fan-out a JSON message to all connected clients and admins.
+        
+        Dead connections (broken pipes, network drops) are silently collected
+        and removed AFTER the broadcast loop completes. This avoids mutating
+        the set during iteration.
+        """
         dead_connections = set()
         dead_admins = set()
         
@@ -92,7 +124,6 @@ class ConnectionManager:
             except Exception:
                 dead_admins.add(connection)
                 
-        # Cleanup broken pipes
         for dead in dead_connections:
             self.active_connections.remove(dead)
             

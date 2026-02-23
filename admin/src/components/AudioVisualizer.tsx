@@ -1,3 +1,21 @@
+/**
+ * AudioVisualizer.tsx — Real-time frequency spectrum display for admin audio monitoring.
+ *
+ * Receives raw PCM Int16 audio over WebSocket from Queue B (server audio_ingest),
+ * normalizes to Float32 for the Web Audio API, and renders a live frequency graph
+ * using AnalyserNode + Canvas.
+ *
+ * Key design decisions:
+ * - Silent gain node: Audio is routed through a GainNode with gain=0 to prevent
+ *   audible playback while still feeding data to the AnalyserNode for visualization.
+ * - Gapless scheduling: Packets are scheduled sequentially using nextStartTime to
+ *   prevent gaps or overlaps. A drift correction mechanism caps the future buffer
+ *   at 300ms and snaps back to real-time if the schedule falls too far behind.
+ * - Canvas resolution sync: Internal canvas dimensions are synced to CSS dimensions
+ *   on every frame to prevent visual squishing from resolution mismatch.
+ * - Reconnect on close: The WebSocket auto-reconnects every 2 seconds. On React
+ *   unmount, onclose is nullified to prevent zombie reconnect loops.
+ */
 import { useEffect, useRef, useState } from 'react';
 
 interface VisualizerProps {
@@ -25,8 +43,11 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
             audioCtxRef.current = audioCtx;
             analyserRef.current = analyser;
 
-            // Connect to a silent gain node so it processes correctly without recursive feedback or deafening feedback loops.
-            // This MUST be done once per session, not per packet.
+            // SILENT GAIN NODE: Route audio through the analyser but output at
+            // zero volume. This lets us visualize the spectrum without producing
+            // audible output. The connection chain is:
+            //   AudioBufferSource → AnalyserNode → GainNode(0) → AudioDestination
+            // This must be set up once per AudioContext, not per packet.
             const silentNode = audioCtx.createGain();
             silentNode.gain.value = 0;
             analyser.connect(silentNode);
@@ -47,31 +68,29 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
                 const activeAnalyser = analyserRef.current;
                 if (!ctx || !activeAnalyser) return;
 
-                // In production, Queue B pipes Int16 raw PCM arrays over the socket.
+                // PCM Int16 → Float32 normalization for Web Audio API
+                // Int16 range is [-32768, 32767], Float32 range is [-1.0, 1.0]
                 const pcmData = new Int16Array(event.data);
                 const floatData = new Float32Array(pcmData.length);
-
-                // Normalize Int16 to Float32 (-1.0 to 1.0) for Web Audio API
                 for (let i = 0; i < pcmData.length; i++) {
                     floatData[i] = pcmData[i] / 32768.0;
                 }
 
-                // Create an AudioBuffer and copy the normalized samples
                 const audioBuffer = ctx.createBuffer(1, floatData.length, ctx.sampleRate);
                 audioBuffer.copyToChannel(floatData, 0);
 
-                // Play the buffer securely through the analyser node
                 const source = ctx.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(activeAnalyser);
 
-                // Schedule gapless playback, but drop frames if we fall behind too much
-                // This guarantees zero-latency live sync over time instead of building an infinite lag queue 
+                // GAPLESS PLAYBACK SCHEDULING with drift correction:
+                // Schedule each packet to play immediately after the previous one.
+                // If we fall behind (nextStartTime < currentTime), snap to now.
+                // If we're scheduled too far in the future (>300ms ahead), snap back
+                // to 50ms ahead to clear the accumulated latency backlog instantly.
                 if (nextStartTime < ctx.currentTime) {
                     nextStartTime = ctx.currentTime;
                 } else if (nextStartTime > ctx.currentTime + 0.3) {
-                    // We are rendering extremely far in the future due to a packet wave or lag drop.
-                    // Snap the pointer back to reality to clear the backlog instantly.
                     nextStartTime = ctx.currentTime + 0.05;
                 }
 
@@ -96,7 +115,8 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken }: Visua
         return () => {
             clearTimeout(reconnectTimeout);
             if (ws) {
-                // Prevent onclose reconnect triggers when React intentionally unmounts it
+                // Nullify onclose to prevent reconnect loop during React unmount.
+                // Without this, the cleanup triggers onclose which triggers connect().
                 ws.onclose = null;
                 ws.close();
             }

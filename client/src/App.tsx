@@ -1,8 +1,24 @@
+/**
+ * App.tsx — GPBB Harmoni Client (Public Consumer)
+ *
+ * This is the public-facing listener app. Users enter a passphrase to connect
+ * via WebSocket and receive real-time Indonesian→English translation.
+ *
+ * Key design decisions (see lessons.md):
+ * - generateId fallback (Lesson #5): crypto.randomUUID() is unavailable in
+ *   non-HTTPS contexts. Falls back to Math.random() concatenation.
+ * - TTS ref pattern (Lesson #9): TTS settings are mirrored to a useRef to avoid
+ *   including them in the WebSocket useEffect dependency array, which would
+ *   cause reconnection on every TTS toggle/volume/voice change.
+ * - Wake Lock (Lesson #10): Requested on mount AND on the first user tap. Mobile
+ *   browsers require an explicit user gesture before granting wake locks.
+ * - WebSocket code 1008 (Lesson #8): Close code 1008 (Policy Violation) suppresses
+ *   auto-reconnect and returns the user to the passphrase prompt.
+ * - <end> token handling (Lesson #7): Soniox's <end> tokens are converted to
+ *   isLineBreak spacer divs instead of \n text, preventing invisible clickable spans.
+ */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import TokenPrompt from './components/TokenPrompt';
-
-// Replace with wss://example.com/ws/listen in production
-
 
 interface TextSpan {
     id: string;
@@ -13,7 +29,10 @@ interface TextSpan {
     isLineBreak?: boolean;
 }
 
-// Fallback ID generator for non-HTTPS mobile browser contexts where crypto.randomUUID is disabled
+// FALLBACK ID GENERATOR (Lesson #5):
+// crypto.randomUUID() is only available in secure contexts (HTTPS or localhost).
+// When accessed via HTTP (e.g., ngrok tunnel, direct IP), the Crypto API is
+// entirely unavailable. This fallback uses Math.random() concatenation instead.
 const generateId = () => {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
         return crypto.randomUUID();
@@ -23,7 +42,11 @@ const generateId = () => {
 
 // --- HOOKS ---
 
-// Hook to request a Web Screen Wake Lock to prevent mobile devices from sleeping
+// WAKE LOCK HOOK (Lesson #10):
+// Keeps the screen on during live translation sessions. The Wake Lock API
+// requires HTTPS and a user gesture. On non-HTTPS, it gracefully degrades.
+// The hook also re-requests the lock when the tab becomes visible again,
+// because browsers release wake locks when the tab is hidden.
 function useWakeLock() {
     const wakeLockRef = useRef<any>(null);
 
@@ -160,7 +183,11 @@ export default function App() {
         }
     }, [isTtsEnabled]);
 
-    // Refs for TTS settings to avoid WS reconnects on state changes
+    // TTS REF PATTERN (Lesson #9):
+    // These refs mirror the TTS state variables. The WebSocket onmessage handler
+    // reads from the ref instead of the state closure, so changing TTS settings
+    // does NOT trigger a WebSocket reconnection. The ref is synced via a separate
+    // useEffect that is NOT in the WebSocket effect's dependency array.
     const ttsSettingsRef = useRef({
         enabled: isTtsEnabled,
         volume: ttsVolume,
@@ -454,14 +481,17 @@ export default function App() {
             }
         };
 
+        // RECONNECT SUPPRESSION (Lesson #8):
+        // Code 1008 = Policy Violation (token revoked by admin). Clear the session
+        // and return to the passphrase prompt WITHOUT auto-reconnecting. Any other
+        // close code triggers a 3-second reconnect attempt.
         ws.onclose = (event) => {
             setConnectionState('error');
             if (event.code === 1008) {
                 setErrorMsg('Invalid session token. You have been disconnected.');
                 setSessionToken(null);
             } else {
-                // setErrorMsg('Connection to server lost. Reconnecting in 3s...');
-                // Auto-reconnect
+                // Auto-reconnect for unexpected disconnections
                 reconnectTimeoutRef.current = window.setTimeout(() => {
                     setReconnectTrigger(prev => prev + 1);
                 }, 3000);

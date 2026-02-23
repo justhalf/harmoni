@@ -1,6 +1,26 @@
+/**
+ * LiveTranscription.tsx — Real-time dual-panel translation viewer for the admin dashboard.
+ *
+ * Connects to the server via WebSocket (/ws/listen with is_admin=true) and displays
+ * synchronized Original + English text panels with live streaming updates.
+ *
+ * Key design decisions:
+ * - createPortal for popover: The outer container uses backdrop-blur-xl which creates
+ *   a new stacking context. Without createPortal, the popover would be clipped.
+ * - activePopoverIdRef (useRef): Prevents stale closures in scroll/resize handlers.
+ *   React state (activePopover) can be stale inside event handlers registered in
+ *   useEffect. The ref always holds the latest ID. See Lesson #9 pattern.
+ * - isAutoScrolling ref: Distinguishes auto-scroll (from new text) vs manual scroll.
+ *   Manual scroll dismisses the popover; auto-scroll simply repositions it.
+ * - overflow-hidden on grid: Prevents the Original text box from growing in height
+ *   as new streamed text arrives. Both panels scroll internally instead.
+ * - SRT export: Uses start_ms/end_ms from Soniox when available, with fallback
+ *   timestamp estimation based on text length.
+ * - mousedown dismiss: Uses document-level mousedown (not click) to dismiss the
+ *   popover before React's synthetic click phase, ensuring instant response.
+ */
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-
 
 interface LiveTranscriptionProps {
     sessionToken: string;
@@ -55,12 +75,22 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         }
     };
 
-    // State for the streaming text
+    // --- Transcription data state ---
+    // spans: finalized text segments with IDs, original text, English text, and timestamps.
+    // draftTextEn/draftTextOrig: in-progress text from Soniox (not yet finalized).
+    // pendingOrigRef: accumulates original-language tokens that arrive before their
+    // corresponding English translation token, ensuring they're paired correctly.
     const [spans, setSpans] = useState<TextSpan[]>([]);
     const [draftTextEn, setDraftTextEn] = useState<string>('');
     const [draftTextOrig, setDraftTextOrig] = useState<string>('');
     const pendingOrigRef = useRef<string>('');
 
+    // --- Popover state ---
+    // activePopover: React state for rendering (contains id + orig text).
+    // activePopoverIdRef: Mirror ref for use in event handlers that may capture
+    //   stale closures (handleScroll, updatePopoverPosition, handleClickOutside).
+    //   Both must be kept in sync on every popover open/close/switch.
+    // popoverRect: DOMRect of the clicked span, used for positioning the popover.
     const [activePopover, setActivePopover] = useState<{ id: string; orig: string; } | null>(null);
     const activePopoverIdRef = useRef<string | null>(null);
     const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
