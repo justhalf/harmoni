@@ -291,11 +291,14 @@ export default function App() {
         const handleClickOutside = (e: MouseEvent) => {
             if (!activePopover) return;
             const target = e.target as HTMLElement;
-            // Never dismiss if clicking inside the popover itself or inside the English text area
+            // Never dismiss if clicking inside the popover itself
             const isClickInPopover = target.closest('#translation-popover');
+
+            // Allow dismissal when clicking the English box, UNLESS specifically clicking a span
+            const isClickOnSpan = target.closest('span[id^="span-"]');
             const isClickInEnBox = scrollRefEn.current?.contains(target);
 
-            if (!isClickInPopover && !isClickInEnBox) {
+            if (!isClickInPopover && (!isClickInEnBox || !isClickOnSpan)) {
                 setActivePopover(null);
                 setPopoverRect(null);
             }

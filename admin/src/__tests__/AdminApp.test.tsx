@@ -24,7 +24,7 @@ describe('AdminApp Login', () => {
 
     beforeEach(() => {
         mockFetch.mockReset();
-        global.fetch = mockFetch as any;
+        vi.stubGlobal('fetch', mockFetch);
     });
 
     it('renders login form when unauthenticated', () => {

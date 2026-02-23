@@ -64,7 +64,7 @@ describe('Token Prompt', () => {
     });
 
     it('shows passphrase input on load', async () => {
-        vi.spyOn(global, 'fetch').mockResolvedValue({
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue({
             ok: true,
             json: () => Promise.resolve({ status: 'online' }),
         } as Response);
@@ -77,7 +77,7 @@ describe('Token Prompt', () => {
     });
 
     it('shows session title text', async () => {
-        vi.spyOn(global, 'fetch').mockResolvedValue({
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue({
             ok: true,
             json: () => Promise.resolve({ status: 'online' }),
         } as Response);
@@ -90,7 +90,7 @@ describe('Token Prompt', () => {
     });
 
     it('validates correct token and transitions to connected state', async () => {
-        const fetchSpy = vi.spyOn(global, 'fetch');
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
         // First call: /health → online
         fetchSpy.mockResolvedValueOnce({
@@ -126,7 +126,7 @@ describe('Token Prompt', () => {
     });
 
     it('shows error on invalid token', async () => {
-        const fetchSpy = vi.spyOn(global, 'fetch');
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
         // First call: /health → online
         fetchSpy.mockResolvedValueOnce({
@@ -158,7 +158,7 @@ describe('Token Prompt', () => {
     });
 
     it('disables input when server is offline', async () => {
-        vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Network error'));
+        vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network error'));
 
         render(<App />);
 

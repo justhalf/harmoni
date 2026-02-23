@@ -229,11 +229,14 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         const handleClickOutside = (e: MouseEvent) => {
             if (!activePopover) return;
             const target = e.target as HTMLElement;
-            // Never dismiss if clicking inside the popover itself or inside the English text area
+            // Never dismiss if clicking inside the popover itself
             const isClickInPopover = target.closest('#translation-popover');
+
+            // Allow dismissal when clicking the English box, UNLESS specifically clicking a span
+            const isClickOnSpan = target.closest('span[id^="span-"]');
             const isClickInEnBox = scrollRefEn.current?.contains(target);
 
-            if (!isClickInPopover && !isClickInEnBox) {
+            if (!isClickInPopover && (!isClickInEnBox || !isClickOnSpan)) {
                 activePopoverIdRef.current = null;
                 setActivePopover(null);
                 setPopoverRect(null);
@@ -589,6 +592,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
 
                     <div
                         ref={scrollRefOrig}
+                        onScroll={handleScroll}
                         className={`overflow-y-auto overflow-x-hidden leading-relaxed font-sans scrollbar-thin scrollbar-thumb-slate-600 scrollbar-track-transparent pr-2 flex-1 transition-colors duration-200 ${getFontSizeClass()} ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}
                         style={{
                             WebkitMaskImage: `linear-gradient(to bottom, rgba(0,0,0,${topAlpha.toFixed(2)}) 0%, rgba(0,0,0,1) 30%)`,
