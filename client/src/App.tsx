@@ -27,6 +27,7 @@ interface TextSpan {
     start_ms?: number;
     end_ms?: number;
     isLineBreak?: boolean;
+    isSystemMessage?: boolean;
 }
 
 // FALLBACK ID GENERATOR (Lesson #5):
@@ -105,6 +106,8 @@ export default function App() {
     const [activePopover, setActivePopover] = useState<{ id: string; orig: string; } | null>(null);
     const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
     const [topAlpha, setTopAlpha] = useState(1);
+    const [showMoreBelow, setShowMoreBelow] = useState(false);
+    const [isInitialLoad, setIsInitialLoad] = useState(false);
 
     const STORAGE_KEY = 'harmoni-transcription-v1';
     const EXPIRY_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
@@ -221,6 +224,7 @@ export default function App() {
 
     const isAutoScrolling = useRef(false);
     const scrollTimeoutRef = useRef<number | null>(null);
+    const shouldAutoScrollRef = useRef(false);
 
     const updatePopoverPosition = () => {
         if (!activePopover) return;
@@ -242,22 +246,32 @@ export default function App() {
         setPopoverRect(rect);
     };
 
-    const handleScroll = () => {
-        if (!scrollRefEn.current) return;
-        const el = scrollRefEn.current;
-        const containerH = el.clientHeight;
-        const contentH = el.firstElementChild?.clientHeight || 0;
-        const fullness = containerH > 0 ? Math.min(1, contentH / containerH) : 0;
-        setTopAlpha(1.0 - (0.7 * fullness));
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const target = e.currentTarget;
+        const isEn = target === scrollRefEn.current;
+        const other = isEn ? scrollRefOrig.current : scrollRefEn.current;
 
-        // Sync scroller for Original stream
-        if (scrollRefOrig.current) {
-            const scrollTop = el.scrollTop;
-            const scrollHeight = el.scrollHeight;
-            const scrollRatio = scrollTop / (scrollHeight - containerH || 1);
-            const origHeight = scrollRefOrig.current.scrollHeight;
-            const origClient = scrollRefOrig.current.clientHeight;
-            scrollRefOrig.current.scrollTop = scrollRatio * (origHeight - origClient);
+        const { scrollTop, scrollHeight, clientHeight } = target;
+
+        // Drive transparency and "more below" from English box's scroll state
+        if (isEn) {
+            const containerH = clientHeight;
+            const contentH = target.firstElementChild?.clientHeight || 0;
+            const fullness = containerH > 0 ? Math.min(1, contentH / containerH) : 0;
+            setTopAlpha(1.0 - (0.7 * fullness));
+
+            // Hide "more below" if we reached the bottom of English
+            if (scrollHeight - scrollTop - clientHeight < 50) {
+                setShowMoreBelow(false);
+            }
+        }
+
+        // Sync scroller for the OTHER box
+        if (other && !isAutoScrolling.current) {
+            const scrollRatio = scrollTop / (scrollHeight - clientHeight || 1);
+            const otherHeight = other.scrollHeight;
+            const otherClient = other.clientHeight;
+            other.scrollTop = scrollRatio * (otherHeight - otherClient);
         }
 
         if (activePopover) {
@@ -271,23 +285,36 @@ export default function App() {
         }
     };
 
-    // Auto-scroll to bottom as new text streams in
+    const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        isAutoScrolling.current = true;
+        const scrollOptsEn = { top: scrollRefEn.current?.scrollHeight, behavior };
+        const scrollOptsOrig = { top: scrollRefOrig.current?.scrollHeight, behavior };
+
+        scrollRefEn.current?.scrollTo(scrollOptsEn);
+        scrollRefOrig.current?.scrollTo(scrollOptsOrig);
+
+        if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current);
+        scrollTimeoutRef.current = window.setTimeout(() => {
+            isAutoScrolling.current = false;
+        }, 350);
+    };
+
+    // Auto-scroll effect after render
     useEffect(() => {
-        if (scrollRefEn.current) {
-            isAutoScrolling.current = true;
-            scrollRefEn.current.scrollTop = scrollRefEn.current.scrollHeight;
+        if (shouldAutoScrollRef.current || isInitialLoad) {
+            const isInit = isInitialLoad;
 
-            // Allow DOM repaint to settle before calculating offset rect
-            requestAnimationFrame(() => {
-                updatePopoverPosition();
+            // Synchronously clear flags so they don't leak if the effect re-runs
+            shouldAutoScrollRef.current = false;
+            if (isInit) setIsInitialLoad(false);
 
-                if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-                scrollTimeoutRef.current = window.setTimeout(() => {
-                    isAutoScrolling.current = false;
-                }, 100);
-            });
+            const timer = setTimeout(() => {
+                scrollToBottom(isInit ? 'auto' : 'smooth');
+            }, isInit ? 300 : 50);
+
+            return () => clearTimeout(timer);
         }
-    }, [spans, draftTextEn, draftTextOrig]);
+    }, [spans, draftTextEn, draftTextOrig, isInitialLoad]);
 
     // Tap outside to dismiss
     useEffect(() => {
@@ -311,6 +338,8 @@ export default function App() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [activePopover]);
 
+    // Auto-scroll removed here, now handled in onmessage with bottom detection logic
+
     // Update position on window resize
     useEffect(() => {
         const handleResize = () => {
@@ -327,12 +356,31 @@ export default function App() {
 
     // Initial load from localStorage
     useEffect(() => {
+        if (!sessionToken) return; // Do not load into state while on login screen
+        if (isInitialLoad) return; // Only do this once
+
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
             try {
-                const { expiry, spans: savedSpans } = JSON.parse(saved);
+                const { expiry, lastSaved, spans: savedSpans } = JSON.parse(saved);
                 if (Date.now() < expiry) {
-                    setSpans(savedSpans);
+                    const filteredSpans = savedSpans.filter((s: TextSpan) => !s.isSystemMessage);
+
+                    if (filteredSpans.length > 0) {
+                        const savedDate = new Date(lastSaved || Date.now());
+                        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                        const dateStr = `${savedDate.getDate()} ${months[savedDate.getMonth()]} ${savedDate.getFullYear()}`;
+                        const timeStr = `${String(savedDate.getHours()).padStart(2, '0')}:${String(savedDate.getMinutes()).padStart(2, '0')}`;
+
+                        const indicatorSpan: TextSpan = {
+                            id: `system-${Date.now()}`,
+                            orig: `loaded data from ${dateStr}, ${timeStr}`,
+                            en: `loaded data from ${dateStr}, ${timeStr}`,
+                            isSystemMessage: true
+                        };
+                        setSpans([...filteredSpans, indicatorSpan]);
+                        setIsInitialLoad(true);
+                    }
                 } else {
                     localStorage.removeItem(STORAGE_KEY);
                 }
@@ -341,14 +389,19 @@ export default function App() {
                 localStorage.removeItem(STORAGE_KEY);
             }
         }
-    }, []);
+    }, [sessionToken]);
 
     // Save to localStorage on change
     useEffect(() => {
         if (spans.length === 0) return;
+        // Don't save if it's only the system message
+        const realSpans = spans.filter(s => !s.isSystemMessage);
+        if (realSpans.length === 0) return;
+
         const data = {
             expiry: Date.now() + EXPIRY_MS,
-            spans: spans
+            lastSaved: Date.now(),
+            spans: realSpans
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     }, [spans]);
@@ -376,6 +429,10 @@ export default function App() {
         };
 
         ws.onmessage = (event) => {
+            const wasAtBottom = scrollRefEn.current
+                ? (isAutoScrolling.current || scrollRefEn.current.scrollHeight - scrollRefEn.current.scrollTop - scrollRefEn.current.clientHeight < 100)
+                : true;
+
             try {
                 const payload = JSON.parse(event.data);
 
@@ -509,6 +566,13 @@ export default function App() {
                     }
 
                     setDraftTextEn(newDraftEn);
+
+                    // Handle auto-scroll or "more below" indicator
+                    if (wasAtBottom) {
+                        shouldAutoScrollRef.current = true;
+                    } else if (newDraftEn || incomingSpans.length > 0) {
+                        setShowMoreBelow(true);
+                    }
                 }
             } catch (err) {
                 console.error("Failed to parse token payload", err);
@@ -759,25 +823,58 @@ export default function App() {
                                     The original speech will appear here...
                                 </div>
                             ) : (
-                                <p>
-                                    {spans.map((span, index) => {
-                                        if (span.isLineBreak) {
-                                            // Ensure we don't render multiple continuous blank blocks or first-element blank blocks
-                                            if (index === 0 || spans[index - 1]?.isLineBreak) return null;
-                                            return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                <div className="flex flex-col">
+                                    {(() => {
+                                        const systemIdx = spans.findIndex(s => s.isSystemMessage);
+                                        if (systemIdx === -1) {
+                                            return (
+                                                <p>
+                                                    {spans.map((span, index) => {
+                                                        if (span.isLineBreak) {
+                                                            if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                            return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                        }
+                                                        return <span key={`${span.id}-orig`} className="relative transition-colors">{span.orig}</span>;
+                                                    })}
+                                                    {draftTextOrig && <span className="text-gray-400 dark:text-gray-500 transition-opacity duration-200">{draftTextOrig}</span>}
+                                                </p>
+                                            );
                                         }
+
+                                        const oldSpans = spans.slice(0, systemIdx);
+                                        const systemSpan = spans[systemIdx];
+                                        const newSpans = spans.slice(systemIdx + 1);
+
                                         return (
-                                            <span key={`${span.id}-orig`} className="relative transition-colors">
-                                                {span.orig}
-                                            </span>
+                                            <>
+                                                <p>
+                                                    {oldSpans.map((span, index) => {
+                                                        if (span.isLineBreak) {
+                                                            if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                            return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                        }
+                                                        return <span key={`${span.id}-orig`} className="relative transition-colors">{span.orig}</span>;
+                                                    })}
+                                                </p>
+                                                <div key={systemSpan.id} className="w-full flex items-center justify-center gap-2 sm:gap-4 mt-[3px] mb-3 opacity-90 select-none text-center">
+                                                    <div className="h-[1px] w-4 sm:w-8 bg-gray-300 dark:bg-gray-600"></div>
+                                                    <span className="text-[10px] sm:text-[11px] font-medium italic tracking-widest text-gray-500 dark:text-gray-400 whitespace-nowrap">{systemSpan.orig}</span>
+                                                    <div className="h-[1px] w-4 sm:w-8 bg-gray-300 dark:bg-gray-600"></div>
+                                                </div>
+                                                <p>
+                                                    {newSpans.map((span, index) => {
+                                                        if (span.isLineBreak) {
+                                                            if (index === 0 || newSpans[index - 1]?.isLineBreak) return null;
+                                                            return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                        }
+                                                        return <span key={`${span.id}-orig`} className="relative transition-colors">{span.orig}</span>;
+                                                    })}
+                                                    {draftTextOrig && <span className="text-gray-400 dark:text-gray-500 transition-opacity duration-200">{draftTextOrig}</span>}
+                                                </p>
+                                            </>
                                         );
-                                    })}
-                                    {draftTextOrig && (
-                                        <span className="text-gray-400 dark:text-gray-500 transition-opacity duration-200">
-                                            {draftTextOrig}
-                                        </span>
-                                    )}
-                                </p>
+                                    })()}
+                                </div>
                             )}
                         </div>
                     </div>
@@ -808,42 +905,132 @@ export default function App() {
                                     Waiting for the speaker to begin...
                                 </div>
                             ) : (
-                                <p>
-                                    {spans.map((span, index) => {
-                                        if (span.isLineBreak) {
-                                            // Ensure we don't render multiple continuous blank blocks or first-element blank blocks
-                                            if (index === 0 || spans[index - 1]?.isLineBreak) return null;
-                                            return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
-                                        }
-                                        return (
-                                            <span
-                                                key={span.id}
-                                                id={`span-${span.id}`}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    // Only show popover if there's actual Original text to show
-                                                    if (span.orig.trim() && span.orig !== '<end>') {
-                                                        if (activePopover?.id === span.id) {
-                                                            setActivePopover(null);
-                                                            setPopoverRect(null);
-                                                        } else {
-                                                            setActivePopover({ id: span.id, orig: span.orig });
-                                                            setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                <div className="flex flex-col">
+                                    {(() => {
+                                        const systemIdx = spans.findIndex(s => s.isSystemMessage);
+                                        if (systemIdx === -1) {
+                                            return (
+                                                <p>
+                                                    {spans.map((span, index) => {
+                                                        if (span.isLineBreak) {
+                                                            if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                            return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
                                                         }
-                                                    }
-                                                }}
-                                                className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? 'cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600' : ''} ${activePopover?.id === span.id ? 'bg-blue-200 dark:bg-blue-800' : ''}`}
-                                            >
-                                                {span.en}
-                                            </span>
+                                                        return (
+                                                            <span
+                                                                key={span.id} id={`span-${span.id}`}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (span.orig.trim() && span.orig !== '<end>') {
+                                                                        if (activePopover?.id === span.id) {
+                                                                            setActivePopover(null);
+                                                                            setPopoverRect(null);
+                                                                        } else {
+                                                                            setActivePopover({ id: span.id, orig: span.orig });
+                                                                            setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? 'cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600' : ''} ${activePopover?.id === span.id ? 'bg-blue-200 dark:bg-blue-800' : ''}`}
+                                                            >
+                                                                {span.en}
+                                                            </span>
+                                                        );
+                                                    })}
+                                                    {draftTextEn && <span className="text-gray-400 dark:text-gray-500 transition-opacity duration-200">{draftTextEn}</span>}
+                                                </p>
+                                            );
+                                        }
+
+                                        const oldSpans = spans.slice(0, systemIdx);
+                                        const systemSpan = spans[systemIdx];
+                                        const newSpans = spans.slice(systemIdx + 1);
+
+                                        return (
+                                            <>
+                                                <p>
+                                                    {oldSpans.map((span, index) => {
+                                                        if (span.isLineBreak) {
+                                                            if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                            return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                        }
+                                                        return (
+                                                            <span
+                                                                key={span.id} id={`span-${span.id}`}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (span.orig.trim() && span.orig !== '<end>') {
+                                                                        if (activePopover?.id === span.id) {
+                                                                            setActivePopover(null);
+                                                                            setPopoverRect(null);
+                                                                        } else {
+                                                                            setActivePopover({ id: span.id, orig: span.orig });
+                                                                            setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? 'cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600' : ''} ${activePopover?.id === span.id ? 'bg-blue-200 dark:bg-blue-800' : ''}`}
+                                                            >
+                                                                {span.en}
+                                                            </span>
+                                                        );
+                                                    })}
+                                                </p>
+                                                <div key={systemSpan.id} className="w-full flex items-center justify-center gap-2 sm:gap-4 mt-[3px] mb-3 opacity-90 select-none text-center">
+                                                    <div className="h-[1px] w-4 sm:w-8 bg-gray-300 dark:bg-gray-600"></div>
+                                                    <span className="text-[10px] sm:text-[11px] font-medium italic tracking-widest text-gray-500 dark:text-gray-400 whitespace-nowrap">{systemSpan.en}</span>
+                                                    <div className="h-[1px] w-4 sm:w-8 bg-gray-300 dark:bg-gray-600"></div>
+                                                </div>
+                                                <p>
+                                                    {newSpans.map((span, index) => {
+                                                        if (span.isLineBreak) {
+                                                            if (index === 0 || newSpans[index - 1]?.isLineBreak) return null;
+                                                            return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                        }
+                                                        return (
+                                                            <span
+                                                                key={span.id} id={`span-${span.id}`}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (span.orig.trim() && span.orig !== '<end>') {
+                                                                        if (activePopover?.id === span.id) {
+                                                                            setActivePopover(null);
+                                                                            setPopoverRect(null);
+                                                                        } else {
+                                                                            setActivePopover({ id: span.id, orig: span.orig });
+                                                                            setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? 'cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600' : ''} ${activePopover?.id === span.id ? 'bg-blue-200 dark:bg-blue-800' : ''}`}
+                                                            >
+                                                                {span.en}
+                                                            </span>
+                                                        );
+                                                    })}
+                                                    {draftTextEn && <span className="text-gray-400 dark:text-gray-500 transition-opacity duration-200">{draftTextEn}</span>}
+                                                </p>
+                                            </>
                                         );
-                                    })}
-                                    {draftTextEn && (
-                                        <span className="text-gray-400 dark:text-gray-500 transition-opacity duration-200">
-                                            {draftTextEn}
-                                        </span>
-                                    )}
-                                </p>
+                                    })()}
+                                </div>
+                            )}
+
+                            {/* Floating "More Below" indicator */}
+                            {showMoreBelow && (
+                                <div
+                                    className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 transition-all duration-300 animate-bounce"
+                                >
+                                    <button
+                                        onClick={() => scrollToBottom('smooth')}
+                                        className={`flex items-center space-x-2 px-4 py-2 rounded-full shadow-lg border transition-all ${isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                                    >
+                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                                        </svg>
+                                        <span className="text-xs font-bold uppercase tracking-wider">More Below</span>
+                                    </button>
+                                </div>
                             )}
                         </div>
                     </div>

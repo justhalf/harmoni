@@ -35,6 +35,7 @@ interface TextSpan {
     start_ms?: number;
     end_ms?: number;
     isLineBreak?: boolean;
+    isSystemMessage?: boolean;
 }
 
 export default function LiveTranscription({ sessionToken }: LiveTranscriptionProps) {
@@ -47,6 +48,8 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
     const [fontSize, setFontSize] = useState<FontSize>(() => {
         return (localStorage.getItem('adminFontSize') as FontSize) || 'regular';
     });
+    const [showMoreBelow, setShowMoreBelow] = useState(false);
+    const [isInitialLoad, setIsInitialLoad] = useState(false);
 
     // Admin uses dark mode by default, but we can allow toggling it back to light/slate
     const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -105,6 +108,11 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
     const STORAGE_KEY = 'harmoni-transcription-v1';
     const EXPIRY_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
+    const displayMenuRef = useRef<HTMLDivElement>(null);
+    const mobileMenuRef = useRef<HTMLDivElement>(null);
+    const mobileTriggerRef = useRef<HTMLDivElement>(null);
+    const shouldAutoScrollRef = useRef(false);
+
     // Fade-out parameters
     const [topAlpha, setTopAlpha] = useState(1);
 
@@ -125,7 +133,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
             }
 
             const text = lang === 'en' ? span.en : span.orig;
-            if (!text.trim() || text === '<end>') continue;
+            if (!text.trim() || text === '<end>' || span.isSystemMessage) continue;
 
             const startMs = span.start_ms ?? fallbackMs;
             const endMs = span.end_ms ?? (startMs + Math.max(1000, text.length * 50));
@@ -180,26 +188,37 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         setPopoverRect(rect);
     };
 
-    const handleScroll = () => {
-        if (!scrollRefEn.current) return;
-        const { scrollTop, scrollHeight, clientHeight } = scrollRefEn.current;
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const target = e.currentTarget;
+        const isEn = target === scrollRefEn.current;
+        const other = isEn ? scrollRefOrig.current : scrollRefEn.current;
+
+        const { scrollTop, scrollHeight, clientHeight } = target;
         const fadeThreshold = 200; // pixels to full fade
 
-        if (scrollHeight <= clientHeight + 10) {
-            setTopAlpha(1.0);
-        } else {
-            let opacity = 1.0 - (scrollTop / fadeThreshold);
-            if (opacity < 0.2) opacity = 0.2;
-            else if (opacity > 1.0) opacity = 1.0;
-            setTopAlpha(opacity);
+        // We only drive transparency and "more below" from the English box's scroll state
+        if (isEn) {
+            if (scrollHeight <= clientHeight + 10) {
+                setTopAlpha(1.0);
+            } else {
+                let opacity = 1.0 - (scrollTop / fadeThreshold);
+                if (opacity < 0.2) opacity = 0.2;
+                else if (opacity > 1.0) opacity = 1.0;
+                setTopAlpha(opacity);
+            }
+
+            // Hide "more below" if we reached the bottom of English
+            if (scrollHeight - scrollTop - clientHeight < 50) {
+                setShowMoreBelow(false);
+            }
         }
 
-        // Sync scroller for Original
-        if (scrollRefOrig.current) {
+        // Sync scroller for the OTHER box
+        if (other && !isAutoScrolling.current) {
             const scrollRatio = scrollTop / (scrollHeight - clientHeight || 1);
-            const origHeight = scrollRefOrig.current.scrollHeight;
-            const origClient = scrollRefOrig.current.clientHeight;
-            scrollRefOrig.current.scrollTop = scrollRatio * (origHeight - origClient);
+            const otherHeight = other.scrollHeight;
+            const otherClient = other.clientHeight;
+            other.scrollTop = scrollRatio * (otherHeight - otherClient);
         }
 
         if (activePopoverIdRef.current) {
@@ -213,6 +232,37 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
             }
         }
     };
+
+    const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        isAutoScrolling.current = true;
+        const scrollOptsEn = { top: scrollRefEn.current?.scrollHeight, behavior };
+        const scrollOptsOrig = { top: scrollRefOrig.current?.scrollHeight, behavior };
+
+        scrollRefEn.current?.scrollTo(scrollOptsEn);
+        scrollRefOrig.current?.scrollTo(scrollOptsOrig);
+
+        if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current);
+        scrollTimeoutRef.current = window.setTimeout(() => {
+            isAutoScrolling.current = false;
+        }, 350);
+    };
+
+    // Auto-scroll effect after render
+    useEffect(() => {
+        if (shouldAutoScrollRef.current || isInitialLoad) {
+            const isInit = isInitialLoad;
+
+            // Synchronously clear flags so they don't leak if the effect re-runs
+            shouldAutoScrollRef.current = false;
+            if (isInit) setIsInitialLoad(false);
+
+            const timer = setTimeout(() => {
+                scrollToBottom(isInit ? 'auto' : 'smooth');
+            }, isInit ? 300 : 50);
+
+            return () => clearTimeout(timer);
+        }
+    }, [spans, draftTextEn, draftTextOrig, isInitialLoad]);
 
     // Update position whenever activePopover changes, or on window resize
     useEffect(() => {
@@ -230,34 +280,64 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
     // Tap outside to dismiss
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
-            if (!activePopover) return;
             const target = e.target as HTMLElement;
-            // Never dismiss if clicking inside the popover itself
-            const isClickInPopover = target.closest('#translation-popover');
 
-            // Allow dismissal when clicking the English box, UNLESS specifically clicking a span
-            const isClickOnSpan = target.closest('span[id^="span-"]');
-            const isClickInEnBox = scrollRefEn.current?.contains(target);
+            // Handle Popover dismissal
+            if (activePopover) {
+                const isClickInPopover = target.closest('#translation-popover');
+                const isClickOnSpan = target.closest('span[id^="span-"]');
+                const isClickInEnBox = scrollRefEn.current?.contains(target);
 
-            if (!isClickInPopover && (!isClickInEnBox || !isClickOnSpan)) {
-                activePopoverIdRef.current = null;
-                setActivePopover(null);
-                setPopoverRect(null);
+                if (!isClickInPopover && (!isClickInEnBox || !isClickOnSpan)) {
+                    activePopoverIdRef.current = null;
+                    setActivePopover(null);
+                    setPopoverRect(null);
+                }
+            }
+
+            // Handle Display Menu dismissal
+            if (isDisplayMenuOpen) {
+                const inDesktop = displayMenuRef.current?.contains(target);
+                const inMobileMenu = mobileMenuRef.current?.contains(target);
+                const inMobileTrigger = mobileTriggerRef.current?.contains(target);
+
+                if (!inDesktop && !inMobileMenu && !inMobileTrigger) {
+                    setIsDisplayMenuOpen(false);
+                }
             }
         };
         // Use mousedown instead of click to trigger before simulated/child bubbling
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [activePopover]);
+    }, [activePopover, isDisplayMenuOpen]);
 
-    // Initial load from localStorage
+    // Initial load from localStorage - only runs ONCE when refs are ready
     useEffect(() => {
+        if (!scrollRefEn.current) return;
+        if (isInitialLoad) return; // Only do this once
+
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
             try {
-                const { expiry, spans: savedSpans } = JSON.parse(saved);
+                const { expiry, lastSaved, spans: savedSpans } = JSON.parse(saved);
                 if (Date.now() < expiry) {
-                    setSpans(savedSpans);
+                    const filteredSpans = savedSpans.filter((s: TextSpan) => !s.isSystemMessage);
+
+                    if (filteredSpans.length > 0) {
+                        const savedDate = new Date(lastSaved || Date.now());
+                        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                        const dateStr = `${savedDate.getDate()} ${months[savedDate.getMonth()]} ${savedDate.getFullYear()}`;
+                        const timeStr = `${String(savedDate.getHours()).padStart(2, '0')}:${String(savedDate.getMinutes()).padStart(2, '0')}`;
+
+                        const indicatorSpan: TextSpan = {
+                            id: `system-${Date.now()}`,
+                            orig: `loaded data from ${dateStr}, ${timeStr}`,
+                            en: `loaded data from ${dateStr}, ${timeStr}`,
+                            isSystemMessage: true
+                        };
+                        setSpans([...filteredSpans, indicatorSpan]);
+                        setIsInitialLoad(true);
+                    }
                 } else {
                     localStorage.removeItem(STORAGE_KEY);
                 }
@@ -266,14 +346,19 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                 localStorage.removeItem(STORAGE_KEY);
             }
         }
-    }, []);
+    }, [sessionToken]);
 
     // Save to localStorage on change
     useEffect(() => {
         if (spans.length === 0) return;
+        // Don't save if it's only the system message
+        const realSpans = spans.filter(s => !s.isSystemMessage);
+        if (realSpans.length === 0) return;
+
         const data = {
             expiry: Date.now() + EXPIRY_MS,
-            spans: spans
+            lastSaved: Date.now(),
+            spans: realSpans
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     }, [spans]);
@@ -314,6 +399,10 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         };
 
         ws.onmessage = (event) => {
+            const wasAtBottom = scrollRefEn.current
+                ? (isAutoScrolling.current || scrollRefEn.current.scrollHeight - scrollRefEn.current.scrollTop - scrollRefEn.current.clientHeight < 100)
+                : true;
+
             try {
                 const payload = JSON.parse(event.data);
 
@@ -424,6 +513,13 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                     }
 
                     setDraftTextEn(newDraftEn);
+
+                    // Handle auto-scroll or "more below" indicator
+                    if (wasAtBottom) {
+                        shouldAutoScrollRef.current = true;
+                    } else if (newDraftEn || incomingSpans.length > 0) {
+                        setShowMoreBelow(true);
+                    }
                 }
             } catch (err) {
                 console.error("Failed to parse token payload", err);
@@ -472,6 +568,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
 
                     {/* Desktop Center Menu Strip */}
                     <div
+                        ref={displayMenuRef}
                         className={`hidden sm:flex items-center rounded-lg shadow-sm mx-4 relative transition-colors border ${isDarkMode ? 'border-slate-700/50 bg-slate-800/50' : 'border-slate-300 bg-white'}`}
                         onClick={(e) => e.stopPropagation()}
                     >
@@ -639,24 +736,59 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                 The original speech will appear here...
                             </div>
                         ) : (
-                            <p>
-                                {spans.map((span, index) => {
-                                    if (span.isLineBreak) {
-                                        if (index === 0 || spans[index - 1]?.isLineBreak) return null;
-                                        return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                            <>
+                                {(() => {
+                                    const systemIdx = spans.findIndex(s => s.isSystemMessage);
+                                    if (systemIdx === -1) {
+                                        return (
+                                            <p>
+                                                {spans.map((span, index) => {
+                                                    if (span.isLineBreak) {
+                                                        if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                        return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                    }
+                                                    return <span key={`${span.id}-orig`} className="relative transition-colors">{span.orig}</span>;
+                                                })}
+                                                {draftTextOrig && <span className={`transition-opacity duration-200 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{draftTextOrig}</span>}
+                                            </p>
+                                        );
                                     }
+
+                                    const oldSpans = spans.slice(0, systemIdx);
+                                    const systemSpan = spans[systemIdx];
+                                    const newSpans = spans.slice(systemIdx + 1);
+
                                     return (
-                                        <span key={`${span.id}-orig`} className="relative transition-colors">
-                                            {span.orig}
-                                        </span>
+                                        <>
+                                            <p>
+                                                {oldSpans.map((span, index) => {
+                                                    if (span.isLineBreak) {
+                                                        if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                        return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                    }
+                                                    return <span key={`${span.id}-orig`} className="relative transition-colors">{span.orig}</span>;
+                                                })}
+                                            </p>
+                                            <div key={systemSpan.id} className="w-full flex items-center justify-center gap-2 sm:gap-4 mt-[3px] mb-3 opacity-90 select-none text-center">
+                                                <div className="h-[1px] w-4 sm:w-8 bg-slate-200 dark:bg-slate-700/50"></div>
+                                                <span className="text-[10px] sm:text-[11px] font-medium italic tracking-widest text-slate-500 dark:text-slate-400 whitespace-nowrap">{systemSpan.orig}</span>
+                                                <div className="h-[1px] w-4 sm:w-8 bg-slate-200 dark:bg-slate-700/50"></div>
+                                            </div>
+                                            <p>
+                                                {newSpans.map((span, index) => {
+                                                    if (span.isLineBreak) {
+                                                        // index is relative to newSpans here, but checking local index is usually fine for formatting
+                                                        if (index === 0 || newSpans[index - 1]?.isLineBreak) return null;
+                                                        return <div key={`${span.id}-id`} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                    }
+                                                    return <span key={`${span.id}-orig`} className="relative transition-colors">{span.orig}</span>;
+                                                })}
+                                                {draftTextOrig && <span className={`transition-opacity duration-200 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{draftTextOrig}</span>}
+                                            </p>
+                                        </>
                                     );
-                                })}
-                                {draftTextOrig && (
-                                    <span className={`transition-opacity duration-200 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                                        {draftTextOrig}
-                                    </span>
-                                )}
-                            </p>
+                                })()}
+                            </>
                         )}
                     </div>
                 </div>
@@ -685,44 +817,140 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                                 Waiting for the speaker to begin...
                             </div>
                         ) : (
-                            <p>
-                                {spans.map((span, index) => {
-                                    if (span.isLineBreak) {
-                                        if (index === 0 || spans[index - 1]?.isLineBreak) return null;
-                                        return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
-                                    }
-                                    return (
-                                        <span
-                                            key={span.id}
-                                            id={`span-${span.id}`}
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                if (span.orig.trim() && span.orig !== '<end>') {
-                                                    if (activePopover?.id === span.id) {
-                                                        activePopoverIdRef.current = null;
-                                                        setActivePopover(null);
-                                                        setPopoverRect(null);
-                                                    } else {
-                                                        activePopoverIdRef.current = span.id;
-                                                        setActivePopover({ id: span.id, orig: span.orig });
-                                                        setPopoverRect(e.currentTarget.getBoundingClientRect());
+                            <>
+                                {(() => {
+                                    const systemIdx = spans.findIndex(s => s.isSystemMessage);
+                                    if (systemIdx === -1) {
+                                        return (
+                                            <p>
+                                                {spans.map((span, index) => {
+                                                    if (span.isLineBreak) {
+                                                        if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                        return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
                                                     }
-                                                }
-                                            }}
-                                            className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? (isDarkMode ? 'cursor-pointer hover:bg-slate-700' : 'cursor-pointer hover:bg-slate-200') : ''} ${activePopover?.id === span.id ? (isDarkMode ? 'bg-indigo-900/50' : 'bg-indigo-100') : ''}`}
-                                        >
-                                            {span.en}
-                                        </span>
+                                                    return (
+                                                        <span
+                                                            key={span.id} id={`span-${span.id}`}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (span.orig.trim() && span.orig !== '<end>') {
+                                                                    if (activePopover?.id === span.id) {
+                                                                        activePopoverIdRef.current = null;
+                                                                        setActivePopover(null);
+                                                                        setPopoverRect(null);
+                                                                    } else {
+                                                                        activePopoverIdRef.current = span.id;
+                                                                        setActivePopover({ id: span.id, orig: span.orig });
+                                                                        setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                                                    }
+                                                                }
+                                                            }}
+                                                            className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? (isDarkMode ? 'cursor-pointer hover:bg-slate-700' : 'cursor-pointer hover:bg-slate-200') : ''} ${activePopover?.id === span.id ? (isDarkMode ? 'bg-indigo-900/50' : 'bg-indigo-100') : ''}`}
+                                                        >
+                                                            {span.en}
+                                                        </span>
+                                                    );
+                                                })}
+                                                {draftTextEn && <span className={`transition-opacity duration-200 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{draftTextEn}</span>}
+                                            </p>
+                                        );
+                                    }
+
+                                    const oldSpans = spans.slice(0, systemIdx);
+                                    const systemSpan = spans[systemIdx];
+                                    const newSpans = spans.slice(systemIdx + 1);
+
+                                    return (
+                                        <>
+                                            <p>
+                                                {oldSpans.map((span, index) => {
+                                                    if (span.isLineBreak) {
+                                                        if (index === 0 || spans[index - 1]?.isLineBreak) return null;
+                                                        return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                    }
+                                                    return (
+                                                        <span
+                                                            key={span.id} id={`span-${span.id}`}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (span.orig.trim() && span.orig !== '<end>') {
+                                                                    if (activePopover?.id === span.id) {
+                                                                        activePopoverIdRef.current = null;
+                                                                        setActivePopover(null);
+                                                                        setPopoverRect(null);
+                                                                    } else {
+                                                                        activePopoverIdRef.current = span.id;
+                                                                        setActivePopover({ id: span.id, orig: span.orig });
+                                                                        setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                                                    }
+                                                                }
+                                                            }}
+                                                            className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? (isDarkMode ? 'cursor-pointer hover:bg-slate-700' : 'cursor-pointer hover:bg-slate-200') : ''} ${activePopover?.id === span.id ? (isDarkMode ? 'bg-indigo-900/50' : 'bg-indigo-100') : ''}`}
+                                                        >
+                                                            {span.en}
+                                                        </span>
+                                                    );
+                                                })}
+                                            </p>
+                                            <div key={systemSpan.id} className="w-full flex items-center justify-center gap-2 sm:gap-4 mt-[3px] mb-3 opacity-90 select-none text-center">
+                                                <div className="h-[1px] w-4 sm:w-8 bg-slate-200 dark:bg-slate-700/50"></div>
+                                                <span className="text-[10px] sm:text-[11px] font-medium italic tracking-widest text-slate-500 dark:text-slate-400 whitespace-nowrap">{systemSpan.en}</span>
+                                                <div className="h-[1px] w-4 sm:w-8 bg-slate-200 dark:bg-slate-700/50"></div>
+                                            </div>
+                                            <p>
+                                                {newSpans.map((span, index) => {
+                                                    if (span.isLineBreak) {
+                                                        if (index === 0 || newSpans[index - 1]?.isLineBreak) return null;
+                                                        return <div key={span.id} className="h-4 sm:h-6 w-full shrink-0"></div>;
+                                                    }
+                                                    return (
+                                                        <span
+                                                            key={span.id} id={`span-${span.id}`}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (span.orig.trim() && span.orig !== '<end>') {
+                                                                    if (activePopover?.id === span.id) {
+                                                                        activePopoverIdRef.current = null;
+                                                                        setActivePopover(null);
+                                                                        setPopoverRect(null);
+                                                                    } else {
+                                                                        activePopoverIdRef.current = span.id;
+                                                                        setActivePopover({ id: span.id, orig: span.orig });
+                                                                        setPopoverRect(e.currentTarget.getBoundingClientRect());
+                                                                    }
+                                                                }
+                                                            }}
+                                                            className={`relative transition-colors rounded ${span.orig.trim() && span.orig !== '<end>' ? (isDarkMode ? 'cursor-pointer hover:bg-slate-700' : 'cursor-pointer hover:bg-slate-200') : ''} ${activePopover?.id === span.id ? (isDarkMode ? 'bg-indigo-900/50' : 'bg-indigo-100') : ''}`}
+                                                        >
+                                                            {span.en}
+                                                        </span>
+                                                    );
+                                                })}
+                                                {draftTextEn && <span className={`transition-opacity duration-200 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{draftTextEn}</span>}
+                                            </p>
+                                        </>
                                     );
-                                })}
-                                {draftTextEn && (
-                                    <span className={`transition-opacity duration-200 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                                        {draftTextEn}
-                                    </span>
-                                )}
-                            </p>
+                                })()}
+                            </>
                         )}
                     </div>
+
+                    {/* Floating "More Below" indicator */}
+                    {showMoreBelow && (
+                        <div
+                            className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 transition-all duration-300 animate-bounce"
+                        >
+                            <button
+                                onClick={() => scrollToBottom('smooth')}
+                                className={`flex items-center space-x-2 px-4 py-2 rounded-full shadow-lg border transition-all ${isDarkMode ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                            >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                                </svg>
+                                <span className="text-xs font-bold uppercase tracking-wider">More Below</span>
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -778,7 +1006,11 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
 
             {/* Mobile Bottom Navigation Bar / Display Dropdown combo */}
             {isDisplayMenuOpen && (
-                <div className={`sm:hidden fixed bottom-16 left-2 right-2 rounded-xl shadow-[0_-4px_16px_rgba(0,0,0,0.15)] border z-50 p-4 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`} onClick={(e) => e.stopPropagation()}>
+                <div
+                    ref={mobileMenuRef}
+                    className={`sm:hidden fixed bottom-16 left-2 right-2 rounded-xl shadow-[0_-4px_16px_rgba(0,0,0,0.15)] border z-50 p-4 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}
+                    onClick={(e) => e.stopPropagation()}
+                >
                     <h3 className={`text-sm font-bold mb-4 uppercase tracking-wider ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Display Settings</h3>
 
                     <div className="mb-4">
@@ -844,7 +1076,10 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                 </div>
             )}
 
-            <div className={`sm:hidden shrink-0 mt-1 flex justify-around items-center z-40 border-t ${isDarkMode ? 'border-slate-700/50' : 'border-slate-300'}`}>
+            <div
+                ref={mobileTriggerRef}
+                className={`sm:hidden shrink-0 mt-1 flex justify-around items-center z-40 border-t ${isDarkMode ? 'border-slate-700/50' : 'border-slate-300'}`}
+            >
                 <button
                     disabled
                     onClick={(e) => { e.stopPropagation(); }}
