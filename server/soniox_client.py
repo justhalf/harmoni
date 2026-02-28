@@ -60,7 +60,98 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
         translation=TranslationConfig(
             type="one_way",
             target_language="en"
-        )
+        ),
+        context={
+            "general": [
+                {
+                "key": "domain",
+                "value": "Christianity"
+                },
+                {
+                "key": "country",
+                "value": "Singapore"
+                },
+                {
+                "key": "area",
+                "value": "Bukit Batok"
+                }
+            ],
+            "terms": [
+                "Bukit Batok",
+                "Joseph Theo",
+                "Yudi Jatmiko",
+                "Victor Wibowo",
+                "Claudia Pajow",
+                "Martus Maleachi"
+            ],
+            "text": "Gereja Presbyterian Bukit Batok (GPBB) is a local church in the west side of Singapore named Bukit Batok. The church hosts Indonesian congregation from multiple background, such as university students, domestic workers, seaman, and senior families, among those in the working age as well. GPBB is a church with reformed theology, beliving in the one God, the Father almighty, creator of heaven and earth, and in Jesus Christ His only Son, our Lord, and in the Holy Spirit.",
+            "translation_terms": [
+                {
+                "source": "GPBB",
+                "target": "GPBB"
+                },
+                {
+                "source": "paskah",
+                "target": "Easter"
+                },
+                {
+                "source": "natal",
+                "target": "Christmas"
+                },
+                {
+                "source": "pra-paskah",
+                "target": "Lent"
+                },
+                {
+                "source": "adven",
+                "target": "Advent"
+                },
+                {
+                "source": "saat teduh",
+                "target": "quiet time"
+                },
+                {
+                "source": "Rabu Abu",
+                "target": "Ash Wednesday"
+                },
+                {
+                "source": "Kamis Putih",
+                "target": "Maundy Thursday"
+                },
+                {
+                "source": "Jumat Agung",
+                "target": "Good Friday"
+                },
+                {
+                "source": "Sabtu Sunyi",
+                "target": "Silent Saturday"
+                },
+                {
+                "source": "Minggu Palma",
+                "target": "Palm Sunday"
+                },
+                {
+                "source": "Minggu Paskah",
+                "target": "Easter Sunday"
+                },
+                {
+                "source": "KU1",
+                "target": "first service"
+                },
+                {
+                "source": "KU2",
+                "target": "second service"
+                },
+                {
+                "source": "K2N",
+                "target": "nurture group"
+                },
+                {
+                "source": "K2M",
+                "target": "discipleship group"
+                }
+            ]
+        }
     )
     
     while True:
