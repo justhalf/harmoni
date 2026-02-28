@@ -77,6 +77,9 @@ class TestConnectionManager:
         await manager.connect(client_ws, is_admin=False)
         await manager.connect(admin_ws, is_admin=True)
 
+        client_ws.send_json.reset_mock()
+        admin_ws.send_json.reset_mock()
+
         message = {"type": "test", "data": "hello"}
         await manager.broadcast(message)
 

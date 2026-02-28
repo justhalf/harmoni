@@ -24,6 +24,7 @@ import { createPortal } from 'react-dom';
 
 interface LiveTranscriptionProps {
     sessionToken: string;
+    onEvent?: (payload: any) => void;
 }
 
 type FontSize = 'small' | 'regular' | 'large';
@@ -38,7 +39,7 @@ interface TextSpan {
     isSystemMessage?: boolean;
 }
 
-export default function LiveTranscription({ sessionToken }: LiveTranscriptionProps) {
+export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscriptionProps) {
     const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
     const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
     const [sonioxActive, setSonioxActive] = useState<boolean>(false);
@@ -408,10 +409,19 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
             try {
                 const payload = JSON.parse(event.data);
 
+                // Forward all arbitrary server payloads upward for global dashboard awareness
+                if (onEvent) {
+                    onEvent(payload);
+                }
+
                 // Handle server-push status updates
                 if (payload.type === 'status') {
                     setSonioxActive(payload.soniox_active ?? false);
                     return;
+                }
+
+                if (payload.type === 'health') {
+                    return; // Bubbled up to AdminApp, ignore inside transcription
                 }
 
                 if (payload.tokens && Array.isArray(payload.tokens)) {

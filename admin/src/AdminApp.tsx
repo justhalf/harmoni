@@ -12,7 +12,7 @@
  * server before setting isAuthenticated=true. A previous bug allowed any
  * non-empty password to bypass authentication entirely.
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import AudioVisualizer from './components/AudioVisualizer';
 import LiveTranscription from './components/LiveTranscription';
 
@@ -22,7 +22,45 @@ const HEALTH_ENDPOINT = '/health';
 const WORD_BANK_NOUNS = ['ocean', 'coffee', 'mountain', 'river', 'sky', 'forest', 'island'];
 const WORD_BANK_ADJ = ['blue', 'morning', 'quiet', 'swift', 'deep', 'cool', 'bright'];
 
+function useWakeLock() {
+    const wakeLockRef = useRef<any>(null);
+
+    const requestWakeLock = useCallback(async () => {
+        if ('wakeLock' in navigator) {
+            try {
+                wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+            } catch (err: any) {
+                console.log(`${err.name}, ${err.message}`);
+            }
+        }
+    }, []);
+
+    const releaseWakeLock = useCallback(async () => {
+        if (wakeLockRef.current !== null) {
+            await wakeLockRef.current.release();
+            wakeLockRef.current = null;
+        }
+    }, []);
+
+    useEffect(() => {
+        const handleVisibilityChange = async () => {
+            if (wakeLockRef.current !== null && document.visibilityState === 'visible') {
+                await requestWakeLock();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            releaseWakeLock();
+        };
+    }, [requestWakeLock, releaseWakeLock]);
+
+    return { requestWakeLock, releaseWakeLock };
+}
+
 export default function AdminApp() {
+    const { requestWakeLock, releaseWakeLock } = useWakeLock();
     const [adminPassword, setAdminPassword] = useState('');
     const [adminSessionToken, setAdminSessionToken] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -41,6 +79,7 @@ export default function AdminApp() {
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        requestWakeLock();
         setLoginError('');
         if (adminPassword.trim() !== "") {
             try {
@@ -130,6 +169,7 @@ export default function AdminApp() {
         setIsAuthenticated(false);
         setAdminSessionToken('');
         localStorage.removeItem('admin_refresh_token');
+        releaseWakeLock();
     };
 
     useEffect(() => {
@@ -147,6 +187,7 @@ export default function AdminApp() {
                         const data = await res.json();
                         setAdminSessionToken(data.access_token);
                         setIsAuthenticated(true);
+                        requestWakeLock();
                         // Wait a moment and try connecting again, this time the
                         // parent component will eventually pass down the new token
                         fetchStats(data.access_token);
@@ -192,6 +233,14 @@ export default function AdminApp() {
             // Silently handle expected network failures when the server is down
             setStats({ online: false, clients: 0, admins: 0, active: false });
             setServerReachable(false);
+        }
+    };
+
+    const handleLiveTranscriptionEvent = (payload: any) => {
+        if (payload.type === 'status') {
+            setStats(prev => ({ ...prev, active: payload.soniox_active ?? prev.active }));
+        } else if (payload.type === 'health') {
+            setStats(prev => ({ ...prev, clients: payload.active_clients ?? prev.clients, admins: payload.active_admins ?? prev.admins }));
         }
     };
 
@@ -329,11 +378,6 @@ export default function AdminApp() {
             <div className="max-w-5xl mx-auto space-y-8">
 
                 <div className="flex items-center space-x-3 mb-8">
-                    <div className="p-2 bg-indigo-500/20 rounded-lg">
-                        <svg className="w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                        </svg>
-                    </div>
                     <div className="flex-1 flex justify-between items-center">
                         <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
                             GPBB Harmoni Admin Dashboard
@@ -494,7 +538,7 @@ export default function AdminApp() {
                 </div>
 
                 {/* Live Transcription Monitor */}
-                <LiveTranscription sessionToken={activePassphrase} />
+                <LiveTranscription sessionToken={activePassphrase} onEvent={handleLiveTranscriptionEvent} />
 
             </div>
         </div>

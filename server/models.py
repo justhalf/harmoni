@@ -66,6 +66,21 @@ class ConnectionManager:
         self.admin_connections = set()
         self.admin_viz_connections = set()
 
+    async def _broadcast_health_to_admins(self):
+        message = {
+            "type": "health",
+            "active_clients": len(self.active_connections),
+            "active_admins": len(self.admin_connections)
+        }
+        dead_admins = set()
+        for connection in self.admin_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                dead_admins.add(connection)
+        for dead in dead_admins:
+            self.admin_connections.remove(dead)
+
     async def connect(self, websocket: WebSocket, is_admin: bool = False):
         if is_admin:
             self.admin_connections.add(websocket)
@@ -73,6 +88,7 @@ class ConnectionManager:
         else:
             self.active_connections.add(websocket)
             logger.info(f"Client connected. Total clients: {len(self.active_connections)}")
+        await self._broadcast_health_to_admins()
 
     def disconnect(self, websocket: WebSocket, is_admin: bool = False):
         if is_admin and websocket in self.admin_connections:
@@ -81,6 +97,13 @@ class ConnectionManager:
         elif not is_admin and websocket in self.active_connections:
             self.active_connections.remove(websocket)
             logger.info(f"Client disconnected. Total clients: {len(self.active_connections)}")
+            
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._broadcast_health_to_admins())
+        except Exception:
+            pass
 
     async def connect_viz(self, websocket: WebSocket):
         self.admin_viz_connections.add(websocket)
