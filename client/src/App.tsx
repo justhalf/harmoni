@@ -108,7 +108,6 @@ export default function App() {
     const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
     const [topAlpha, setTopAlpha] = useState(1);
     const [showMoreBelow, setShowMoreBelow] = useState(false);
-    const [isInitialLoad, setIsInitialLoad] = useState(false);
 
     const STORAGE_KEY = 'harmoni-transcription-v1';
     const EXPIRY_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
@@ -300,22 +299,32 @@ export default function App() {
         }, 350);
     };
 
+    const initialScrollDoneRef = useRef(false);
+
     // Auto-scroll effect after render
     useEffect(() => {
-        if (shouldAutoScrollRef.current || isInitialLoad) {
-            const isInit = isInitialLoad;
+        let doScroll = false;
+        let behavior: ScrollBehavior = 'smooth';
 
-            // Synchronously clear flags so they don't leak if the effect re-runs
+        if (spans.length > 0 && !initialScrollDoneRef.current) {
+            doScroll = true;
+            behavior = 'auto'; // Instant scroll for initial load
+            initialScrollDoneRef.current = true;
             shouldAutoScrollRef.current = false;
-            if (isInit) setIsInitialLoad(false);
+        } else if (shouldAutoScrollRef.current) {
+            doScroll = true;
+            behavior = 'smooth';
+            shouldAutoScrollRef.current = false;
+        }
 
+        if (doScroll) {
+            // A short timeout ensures React paints the DOM changes before calculating height
             const timer = setTimeout(() => {
-                scrollToBottom(isInit ? 'auto' : 'smooth');
-            }, isInit ? 300 : 50);
-
+                scrollToBottom(behavior);
+            }, 50);
             return () => clearTimeout(timer);
         }
-    }, [spans, draftTextEn, draftTextOrig, isInitialLoad]);
+    }, [spans, draftTextEn, draftTextOrig]);
 
     // Tap outside to dismiss
     useEffect(() => {
@@ -355,10 +364,13 @@ export default function App() {
         return () => window.removeEventListener('resize', handleResize);
     }, [activePopover]);
 
+    const hasLoadedFromStorageRef = useRef(false);
+
     // Initial load from localStorage
     useEffect(() => {
         if (!sessionToken) return; // Do not load into state while on login screen
-        if (isInitialLoad) return; // Only do this once
+        if (hasLoadedFromStorageRef.current) return; // Only do this once
+        hasLoadedFromStorageRef.current = true;
 
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
@@ -380,7 +392,6 @@ export default function App() {
                             isSystemMessage: true
                         };
                         setSpans([...filteredSpans, indicatorSpan]);
-                        setIsInitialLoad(true);
                     }
                 } else {
                     localStorage.removeItem(STORAGE_KEY);
