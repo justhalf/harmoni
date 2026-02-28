@@ -42,7 +42,8 @@ interface TextSpan {
 export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscriptionProps) {
     const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
     const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
-    const [sonioxActive, setSonioxActive] = useState<boolean>(false);
+    const [sonioxActivated, setSonioxActivated] = useState<boolean>(false);
+    const [sonioxConnected, setSonioxConnected] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string>('');
 
     // Display Settings Menu State
@@ -50,7 +51,6 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
     const [fontSize, setFontSize] = useState<FontSize>(() => {
         return (localStorage.getItem('adminFontSize') as FontSize) || 'regular';
     });
-    const [showMoreBelow, setShowMoreBelow] = useState(false);
 
     // Admin uses dark mode by default, but we can allow toggling it back to light/slate
     const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -103,16 +103,19 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
     const scrollRefEn = useRef<HTMLDivElement>(null);
     const scrollRefOrig = useRef<HTMLDivElement>(null);
 
-    const isAutoScrolling = useRef(false);
-    const scrollTimeoutRef = useRef<number | null>(null);
-
     const STORAGE_KEY = 'harmoni-transcription-v1';
     const EXPIRY_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
     const displayMenuRef = useRef<HTMLDivElement>(null);
     const mobileMenuRef = useRef<HTMLDivElement>(null);
     const mobileTriggerRef = useRef<HTMLDivElement>(null);
-    const shouldAutoScrollRef = useRef(false);
+
+    // Determines if we should force scroll-to-bottom on the next layout paint.
+    const shouldAutoScrollRef = useRef(true);
+    // Tracks the user's manual scroll position to toggle `shouldAutoScrollRef`
+    const lastScrollTopRef = useRef(0);
+    // Determines if the "More Below" button should be shown
+    const [showMoreBelow, setShowMoreBelow] = useState(false);
 
     // Fade-out parameters
     const [topAlpha, setTopAlpha] = useState(1);
@@ -208,14 +211,27 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
                 setTopAlpha(opacity);
             }
 
-            // Hide "more below" if we reached the bottom of English
-            if (scrollHeight - scrollTop - clientHeight < 50) {
-                setShowMoreBelow(false);
+            const atBottom = scrollHeight - scrollTop - clientHeight < 50;
+
+            // This is a USER-driven scroll event.
+            // If we are actively force-scrolling via rAF, ignore these events so we don't accidentally turn off auto-scroll.
+            if (!shouldAutoScrollRef.current || atBottom) {
+                // If scrollTop decreased, user scrolled up → disable auto-scroll.
+                if (scrollTop < lastScrollTopRef.current - 5) {
+                    shouldAutoScrollRef.current = false;
+                }
+                // If user scrolled back to the bottom → re-enable auto-scroll.
+                if (atBottom) {
+                    shouldAutoScrollRef.current = true;
+                    setShowMoreBelow(false);
+                }
             }
+
+            lastScrollTopRef.current = scrollTop;
         }
 
         // Sync scroller for the OTHER box
-        if (other && !isAutoScrolling.current) {
+        if (other && !shouldAutoScrollRef.current) {
             const scrollRatio = scrollTop / (scrollHeight - clientHeight || 1);
             const otherHeight = other.scrollHeight;
             const otherClient = other.clientHeight;
@@ -223,7 +239,7 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
         }
 
         if (activePopoverIdRef.current) {
-            if (!isAutoScrolling.current) {
+            if (!shouldAutoScrollRef.current) {
                 // Manual user scroll -> dismiss
                 activePopoverIdRef.current = null;
                 setActivePopover(null);
@@ -235,55 +251,26 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
     };
 
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
-        isAutoScrolling.current = true;
+        shouldAutoScrollRef.current = true;
+        setShowMoreBelow(false);
         const scrollOptsEn = { top: scrollRefEn.current?.scrollHeight, behavior };
         const scrollOptsOrig = { top: scrollRefOrig.current?.scrollHeight, behavior };
 
         scrollRefEn.current?.scrollTo(scrollOptsEn);
         scrollRefOrig.current?.scrollTo(scrollOptsOrig);
-
-        if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current);
-        scrollTimeoutRef.current = window.setTimeout(() => {
-            isAutoScrolling.current = false;
-        }, 350);
     };
 
     const initialScrollDoneRef = useRef(false);
 
-    // Auto-scroll effect after render
-    useEffect(() => {
-        let doScroll = false;
-        let behavior: ScrollBehavior = 'smooth';
 
-        if (spans.length > 0 && !initialScrollDoneRef.current) {
-            doScroll = true;
-            behavior = 'auto'; // Instant scroll for initial load
-            initialScrollDoneRef.current = true;
-            shouldAutoScrollRef.current = false;
-        } else if (shouldAutoScrollRef.current) {
-            doScroll = true;
-            behavior = 'smooth';
-            shouldAutoScrollRef.current = false;
-        }
-
-        if (doScroll) {
-            // A short timeout ensures React paints the DOM changes before calculating height
-            const timer = setTimeout(() => {
-                scrollToBottom(behavior);
-            }, 50);
-            return () => clearTimeout(timer);
-        }
-    }, [spans, draftTextEn, draftTextOrig]);
 
     // Update position whenever activePopover changes, or on window resize
     useEffect(() => {
         const handleResize = () => {
-            isAutoScrolling.current = true;
             updatePopoverPosition();
-            if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-            scrollTimeoutRef.current = window.setTimeout(() => {
-                isAutoScrolling.current = false;
-            }, 100);
+            if (shouldAutoScrollRef.current) {
+                scrollToBottom('auto');
+            }
         };
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
@@ -378,23 +365,29 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
     const [reconnectTrigger, setReconnectTrigger] = useState(0);
     const reconnectTimeoutRef = useRef<number | null>(null);
 
-    // Auto-scroll to bottom as new text streams in
+
+
+    // Auto-scroll layout effect
     useEffect(() => {
-        if (scrollRefEn.current) {
-            isAutoScrolling.current = true;
-            scrollRefEn.current.scrollTop = scrollRefEn.current.scrollHeight;
+        // If the user hasn't explicitly scrolled up, anchor to the bottom.
+        if (shouldAutoScrollRef.current) {
+            const frameId = requestAnimationFrame(() => {
+                if (!initialScrollDoneRef.current && spans.length > 0) {
+                    initialScrollDoneRef.current = true;
+                }
 
-            // Allow DOM repaint to settle before calculating offset rect
-            requestAnimationFrame(() => {
+                if (scrollRefEn.current) {
+                    scrollRefEn.current.scrollTop = scrollRefEn.current.scrollHeight;
+                }
+                if (scrollRefOrig.current) {
+                    scrollRefOrig.current.scrollTop = scrollRefOrig.current.scrollHeight;
+                }
+
                 updatePopoverPosition();
-
-                if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-                scrollTimeoutRef.current = window.setTimeout(() => {
-                    isAutoScrolling.current = false;
-                }, 100);
             });
+            return () => cancelAnimationFrame(frameId);
         }
-    }, [spans, draftTextEn, draftTextOrig]);
+    }, [spans, draftTextEn, draftTextOrig, window.innerHeight]);
 
     useEffect(() => {
         if (!sessionToken) return;
@@ -413,9 +406,6 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
         };
 
         ws.onmessage = (event) => {
-            const wasAtBottom = scrollRefEn.current
-                ? (isAutoScrolling.current || scrollRefEn.current.scrollHeight - scrollRefEn.current.scrollTop - scrollRefEn.current.clientHeight < 100)
-                : true;
 
             try {
                 const payload = JSON.parse(event.data);
@@ -427,7 +417,8 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
 
                 // Handle server-push status updates
                 if (payload.type === 'status') {
-                    setSonioxActive(payload.soniox_active ?? false);
+                    setSonioxActivated(payload.soniox_activated ?? false);
+                    setSonioxConnected(payload.soniox_connected ?? false);
                     return;
                 }
 
@@ -538,9 +529,11 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
                     setDraftTextEn(newDraftEn);
 
                     // Handle auto-scroll or "more below" indicator
-                    if (wasAtBottom) {
-                        shouldAutoScrollRef.current = true;
+                    if (shouldAutoScrollRef.current) {
+                        // We are actively anchored to bottom; the useEffect will handle DOM scrolling.
+                        setShowMoreBelow(false);
                     } else if (newDraftEn || incomingSpans.length > 0) {
+                        // We are scrolling up, and new text arrived. Emphasize More Below.
                         setShowMoreBelow(true);
                     }
                 }
@@ -697,8 +690,10 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
                 </div>
                 <div className="flex items-center space-x-2 whitespace-nowrap shrink-0">
                     <span className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Status:</span>
-                    {connectionState === 'connecting' && !hasConnectedOnce && <span className="text-yellow-500 font-medium tracking-wide select-none">Connecting...</span>}
-                    {connectionState === 'connected' && sonioxActive && (
+                    {(connectionState === 'connecting' && !hasConnectedOnce) || (connectionState === 'connected' && sonioxActivated && !sonioxConnected) ? (
+                        <span className="text-yellow-500 font-medium tracking-wide select-none">Connecting...</span>
+                    ) : null}
+                    {connectionState === 'connected' && sonioxActivated && sonioxConnected && (
                         <span
                             className="relative group cursor-default text-emerald-500 font-medium tracking-wide select-none flex items-center gap-1.5"
                             style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
@@ -715,7 +710,7 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
                             </span>
                         </span>
                     )}
-                    {connectionState === 'connected' && !sonioxActive && (
+                    {connectionState === 'connected' && !sonioxActivated && (
                         <span
                             className="relative group cursor-default text-yellow-500 font-medium tracking-wide select-none flex items-center"
                             style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}

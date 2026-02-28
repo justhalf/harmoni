@@ -73,9 +73,13 @@ export default function AdminApp() {
     const [activePassphrase, setActivePassphrase] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
-    const [audioDevices, setAudioDevices] = useState<{ index: number, name: string }[]>([]);
-    const [selectedAudioDevice, setSelectedAudioDevice] = useState<number | ''>('');
+    const [audioDevices, setAudioDevices] = useState<{ index: number | string, name: string }[]>([]);
+    const [audioFiles, setAudioFiles] = useState<string[]>([]);
+    const [selectedAudioDevice, setSelectedAudioDevice] = useState<number | string>(-1);
     const [activeChannels, setActiveChannels] = useState(1);
+
+    const [sessionNameSelection, setSessionNameSelection] = useState('KU1');
+    const [customSessionName, setCustomSessionName] = useState('');
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -224,11 +228,16 @@ export default function AdminApp() {
     const fetchStats = async (sToken: string = adminSessionToken) => {
         if (!sToken) return;
         try {
-            const res = await fetch(HEALTH_ENDPOINT).catch(() => new Response(JSON.stringify({ soniox_connected: false, active_clients: 0, soniox_active: false }), { status: 503 }));
+            const res = await fetch(HEALTH_ENDPOINT).catch(() => new Response(JSON.stringify({ soniox_connected: false, active_clients: 0, soniox_activated: false }), { status: 503 }));
             if (!res.ok) throw new Error("Server offline");
             const data = await res.json();
-            setStats({ online: data.soniox_connected, clients: data.active_clients, admins: data.active_admins || 0, active: data.soniox_active });
+            setStats({ online: data.soniox_connected, clients: data.active_clients, admins: data.active_admins || 0, active: data.soniox_activated });
             setServerReachable(true);
+            // Sync audio device from health poll (for multi-admin consistency)
+            if (data.audio_device_index !== undefined) {
+                setSelectedAudioDevice(data.audio_device_index ?? -1);
+                setActiveChannels(data.audio_device_channels ?? 1);
+            }
         } catch (e) {
             // Silently handle expected network failures when the server is down
             setStats({ online: false, clients: 0, admins: 0, active: false });
@@ -240,35 +249,49 @@ export default function AdminApp() {
         if (payload.type === 'status') {
             setStats(prev => ({
                 ...prev,
-                active: payload.soniox_active ?? prev.active,
-                ...(!payload.soniox_active ? { online: false } : {})
+                active: payload.soniox_activated ?? prev.active,
+                online: payload.soniox_connected ?? prev.online,
+                ...(!payload.soniox_activated ? { online: false } : {})
             }));
+            // Sync audio device selection from other admins
+            if (payload.audio_device_index !== undefined) {
+                setSelectedAudioDevice(payload.audio_device_index ?? -1);
+                setActiveChannels(payload.audio_device_channels ?? 1);
+            }
         } else if (payload.type === 'health') {
             setStats(prev => ({ ...prev, clients: payload.active_clients ?? prev.clients, admins: payload.active_admins ?? prev.admins }));
         }
     };
 
-    const toggleSoniox = async () => {
+    const toggleSession = async () => {
         const newActiveState = !stats.active;
+        // Construct the session name if we're starting a new session
+        let sessionNameToSend = '';
+        if (newActiveState) {
+            const dateStr = new Date().toISOString().split('T')[0];
+            const baseName = sessionNameSelection === 'Custom' ? customSessionName : sessionNameSelection;
+            sessionNameToSend = `${dateStr}-${baseName}`;
+        }
+
         // OPTIMISTIC UI: Update the toggle visually before the server responds.
-        // If the request fails, the next health poll (5s) will correct the state.
         setStats(prev => ({
             ...prev,
             active: newActiveState,
             ...(!newActiveState ? { online: false } : {})
         }));
+
         try {
-            await fetchWithAuth('/api/admin/soniox/toggle', {
+            await fetchWithAuth('/api/admin/session/toggle', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${adminSessionToken}`
                 },
-                body: JSON.stringify({ active: newActiveState })
+                body: JSON.stringify({ active: newActiveState, session_name: sessionNameToSend })
             });
             fetchStats();
         } catch (e) {
-            console.error("Failed to toggle Soniox connection", e);
+            console.error("Failed to toggle Session", e);
         }
     };
 
@@ -281,7 +304,8 @@ export default function AdminApp() {
             if (res.ok) {
                 const data = await res.json();
                 setAudioDevices(data.devices || []);
-                setSelectedAudioDevice(data.active_device_index !== null ? data.active_device_index : '');
+                setAudioFiles(data.audio_files || []);
+                setSelectedAudioDevice(data.active_device_index !== null && data.active_device_index !== undefined ? data.active_device_index : -1);
                 setActiveChannels(data.active_channels || 1);
             }
         } catch (e) {
@@ -291,8 +315,13 @@ export default function AdminApp() {
 
     const handleAudioDeviceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const value = e.target.value;
-        const newDeviceIndex = value === '' ? null : parseInt(value, 10);
-        setSelectedAudioDevice(value === '' ? '' : parseInt(value, 10));
+        let newDeviceIndex: number | string;
+        if (value.startsWith('file:')) {
+            newDeviceIndex = value;
+        } else {
+            newDeviceIndex = parseInt(value, 10);
+        }
+        setSelectedAudioDevice(newDeviceIndex);
 
         try {
             const res = await fetchWithAuth('/api/admin/audio-device', {
@@ -385,84 +414,110 @@ export default function AdminApp() {
         <div className="min-h-[100dvh] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-900 to-black text-slate-200 p-4 sm:p-8 font-sans">
             <div className="max-w-5xl mx-auto space-y-8">
 
-                <div className="flex items-center space-x-3 mb-8">
-                    <div className="flex-1 flex justify-between items-center">
-                        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
-                            GPBB Harmoni Admin Dashboard
-                        </h1>
-                        <button
-                            onClick={handleLogout}
-                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-                        >
-                            Log Out
-                        </button>
-                    </div>
-                </div>
-
-                {/* Header & Stats Strip */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-row items-center justify-center relative overflow-hidden group">
-                        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-
-                        {/* Left Side: Server Status */}
-                        <div className="flex flex-col flex-1 items-center justify-center border-r border-slate-700/50 pr-4 z-10 w-1/2">
-                            <span className="text-slate-400 text-xs sm:text-sm font-medium mb-3 uppercase tracking-wider text-center">Server Status</span>
-                            <div className="flex items-center justify-center w-full h-8">
+                <div className="flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
+                    <div className="flex-1 flex justify-between items-center w-full">
+                        <div className="flex items-center space-x-4">
+                            <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
+                                GPBB Harmoni Admin
+                            </h1>
+                            {/* System Status Pill (Moved from Box) */}
+                            <div className="flex items-center bg-slate-800/80 px-3 py-1 rounded-full border border-slate-700/50 shadow-sm">
                                 {!serverReachable ? (
-                                    <span className="relative group cursor-default text-rose-500 text-sm sm:text-base font-medium tracking-wide select-none flex items-center">
-                                        <span>Offline</span>
-                                    </span>
+                                    <span className="text-rose-500 text-sm font-medium tracking-wide select-none">Offline</span>
                                 ) : stats.active && !stats.online ? (
-                                    <span className="text-yellow-500 text-sm sm:text-base font-medium tracking-wide select-none">Connecting...</span>
+                                    <span className="text-yellow-500 text-sm font-medium tracking-wide select-none">Connecting...</span>
                                 ) : stats.active && stats.online ? (
-                                    <span className="relative group cursor-default text-emerald-500 text-sm sm:text-base font-medium tracking-wide select-none flex items-center gap-1.5">
-                                        <span className="relative flex h-2.5 w-2.5 shrink-0">
+                                    <span className="text-emerald-500 text-sm font-medium tracking-wide select-none flex items-center gap-1.5">
+                                        <span className="relative flex h-2 w-2 shrink-0">
                                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                                         </span>
-                                        <span>Live</span>
+                                        Live
                                     </span>
                                 ) : (
-                                    <span className="relative group cursor-default text-yellow-500 text-sm sm:text-base font-medium tracking-wide select-none flex items-center">
-                                        <span>● Stand By</span>
+                                    <span className="text-yellow-500 text-sm font-medium tracking-wide select-none flex items-center">
+                                        ● Stand By
                                     </span>
                                 )}
                             </div>
                         </div>
 
-                        {/* Right Side: Translation Toggle */}
-                        <div className="flex flex-col flex-1 items-center justify-center pl-4 z-10 w-1/2">
-                            <span className="text-slate-400 text-xs sm:text-sm font-medium mb-3 uppercase tracking-wider text-center">Translation</span>
+                        <button
+                            onClick={handleLogout}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700 ml-4 hidden sm:block"
+                        >
+                            Log Out
+                        </button>
+                    </div>
+                    {/* Mobile log out button */}
+                    <button
+                        onClick={handleLogout}
+                        className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700 w-full sm:hidden"
+                    >
+                        Log Out
+                    </button>
+                </div>
 
-                            <div className="flex items-center justify-center gap-2 mb-1 w-full relative">
-                                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 w-4 sm:w-6 text-right">{stats.active ? 'ON' : 'OFF'}</span>
-                                <button
-                                    onClick={toggleSoniox}
-                                    disabled={!serverReachable}
-                                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${stats.active ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-slate-600 hover:bg-slate-500'}`}
+                {/* Dashboard Boxes Area */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+                    {/* Left Side: Session Control */}
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col justify-center relative overflow-hidden group">
+                        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <span className="text-slate-400 text-xs sm:text-sm font-medium mb-4 uppercase tracking-wider text-center z-10">Session Control</span>
+
+                        <div className="flex flex-col gap-3 z-10 flex-1">
+                            <div className="flex gap-2 w-full">
+                                <select
+                                    value={sessionNameSelection}
+                                    onChange={(e) => setSessionNameSelection(e.target.value)}
+                                    disabled={stats.active || !serverReachable}
+                                    className={`bg-slate-900/50 border border-slate-700/50 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2 outline-none transition-colors ${sessionNameSelection === 'Custom' ? 'w-auto shrink-0' : 'flex-1'} ${stats.active || !serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
-                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${stats.active ? 'translate-x-6' : 'translate-x-1'}`} />
-                                </button>
+                                    <option value="KU1">KU1</option>
+                                    <option value="KU2">KU2</option>
+                                    <option value="Custom">Custom...</option>
+                                </select>
+
+                                {sessionNameSelection === 'Custom' && (
+                                    <input
+                                        type="text"
+                                        placeholder="Name"
+                                        value={customSessionName}
+                                        onChange={(e) => setCustomSessionName(e.target.value)}
+                                        disabled={stats.active || !serverReachable}
+                                        className={`bg-slate-900/50 border border-slate-700/50 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2 outline-none flex-[3] min-w-0 transition-colors ${stats.active || !serverReachable ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    />
+                                )}
                             </div>
 
-                            <div className={`text-sm sm:text-base font-bold tracking-tight select-none mt-1 h-6 flex items-center ${stats.active ? 'text-emerald-400' : 'text-slate-500'}`}>
-                                {stats.active ? 'ACTIVE' : 'INACTIVE'}
-                            </div>
+                            <button
+                                onClick={toggleSession}
+                                disabled={!serverReachable || (sessionNameSelection === 'Custom' && customSessionName.trim() === '')}
+                                className={`w-full py-3 rounded-xl font-bold tracking-wide transition-all ${!serverReachable || (sessionNameSelection === 'Custom' && customSessionName.trim() === '')
+                                    ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                                    : stats.active
+                                        ? 'bg-rose-500/20 text-rose-400 border border-rose-500/50 hover:bg-rose-500/30'
+                                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30'
+                                    }`}
+                            >
+                                {stats.active ? 'End Session' : 'Start Session'}
+                            </button>
                         </div>
                     </div>
 
                     <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden group">
                         <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                        <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider">Active Connections</span>
+                        <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider z-10">Active Connections</span>
                         <div className="flex w-full items-center justify-between text-center mt-3 z-10">
                             <div className="flex flex-col flex-1 border-r border-slate-700/50">
-                                <div className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
+                                <div className="text-3xl font-bold text-slate-200">
                                     {stats.clients}
                                 </div>
                                 <span className="text-xs text-slate-500 font-medium tracking-wide mt-1">Public Listeners</span>
                             </div>
                             <div className="flex flex-col flex-1">
-                                <div className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">
+                                <div className="text-3xl font-bold text-slate-200">
                                     {stats.admins}
                                 </div>
                                 <span className="text-xs text-slate-500 font-medium tracking-wide mt-1">Sys Admins</span>
@@ -470,14 +525,33 @@ export default function AdminApp() {
                         </div>
                     </div>
 
-                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden">
-                        <span className="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">System Checks</span>
-                        <button type="button" onClick={(e) => { e.preventDefault(); fetchStats(); }} className="w-full py-2.5 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/50 rounded-xl text-sm font-medium text-slate-300 transition-all flex items-center justify-center gap-2 hover:bg-slate-700">
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                            Refresh Status
-                        </button>
+                    {/* Right Side: Links Box */}
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col justify-center relative overflow-hidden group">
+                        <span className="text-slate-400 text-xs sm:text-sm font-medium mb-4 uppercase tracking-wider text-center z-10">Quick Links</span>
+                        <div className="flex flex-col gap-3 z-10 w-full flex-1 justify-center">
+                            <a
+                                href="https://harmoni-gpbb.justhalf.page"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="w-full py-2 bg-slate-700/50 hover:bg-slate-600/60 border border-slate-600/50 rounded-xl text-sm font-medium text-slate-300 transition-all text-center flex items-center justify-center gap-2"
+                            >
+                                <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                </svg>
+                                Client WebApp
+                            </a>
+                            <a
+                                href="https://harmoni-verifier-gpbb.justhalf.page"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="w-full py-2 bg-slate-700/50 hover:bg-slate-600/60 border border-slate-600/50 rounded-xl text-sm font-medium text-slate-300 transition-all text-center flex items-center justify-center gap-2"
+                            >
+                                <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Testing Verifier
+                            </a>
+                        </div>
                     </div>
                 </div>
 
@@ -559,12 +633,23 @@ export default function AdminApp() {
                                 disabled={!serverReachable || audioDevices.length === 0}
                                 className={`bg-slate-900/50 border border-slate-700/50 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none transition-colors max-w-[200px] truncate ${(!serverReachable || audioDevices.length === 0) ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
-                                <option value="">Default System Device</option>
-                                {audioDevices.map(device => (
-                                    <option key={device.index} value={device.index}>
-                                        {device.name}
-                                    </option>
-                                ))}
+                                <option value={-1}>Disabled</option>
+                                <optgroup label="System Options">
+                                    {audioDevices.filter(d => d.index !== -1).map(device => (
+                                        <option key={device.index} value={device.index}>
+                                            {device.name}
+                                        </option>
+                                    ))}
+                                </optgroup>
+                                {audioFiles.length > 0 && (
+                                    <optgroup label="File Options">
+                                        {audioFiles.map(file => (
+                                            <option key={`file:${file}`} value={`file:${file}`}>
+                                                File: {file}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                )}
                             </select>
                         </div>
                         <AudioVisualizer

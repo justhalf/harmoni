@@ -96,7 +96,8 @@ export default function App() {
     const [errorMsg, setErrorMsg] = useState('');
     const [isValidating, setIsValidating] = useState(false);
     const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
-    const [sonioxActive, setSonioxActive] = useState(false);
+    const [sonioxActivated, setSonioxActivated] = useState(false);
+    const [sonioxConnected, setSonioxConnected] = useState(false);
 
     // Desktop left panel Original stream
     const [draftTextOrig, setDraftTextOrig] = useState('');
@@ -222,13 +223,9 @@ export default function App() {
     const [reconnectTrigger, setReconnectTrigger] = useState(0);
     const reconnectTimeoutRef = useRef<number | null>(null);
 
-    const isAutoScrolling = useRef(false);
-    const scrollTimeoutRef = useRef<number | null>(null);
-    const shouldAutoScrollRef = useRef(false);
-    // true = auto-scroll to bottom on new content. false = "hold" mode, show More Below.
-    // Flipped OFF when user scrolls up. Flipped ON by scrollToBottom() or user scrolling to bottom.
-    const autoScrollEnabledRef = useRef(true);
-    // Tracks the previous scrollTop to detect user-initiated upward scrolls.
+    // Determines if we should force scroll-to-bottom on the next layout paint.
+    const shouldAutoScrollRef = useRef(true);
+    // Tracks the user's manual scroll position to toggle `shouldAutoScrollRef`
     const lastScrollTopRef = useRef(0);
 
     const updatePopoverPosition = () => {
@@ -267,15 +264,16 @@ export default function App() {
 
             const atBottom = scrollHeight - scrollTop - clientHeight < 50;
 
-            if (!isAutoScrolling.current) {
-                // This is a USER-driven scroll event (not programmatic).
+            // This is a USER-driven scroll event.
+            // If we are actively force-scrolling via rAF, ignore these events so we don't accidentally turn off auto-scroll.
+            if (!shouldAutoScrollRef.current || atBottom) {
                 // If scrollTop decreased, user scrolled up → disable auto-scroll.
                 if (scrollTop < lastScrollTopRef.current - 5) {
-                    autoScrollEnabledRef.current = false;
+                    shouldAutoScrollRef.current = false;
                 }
                 // If user scrolled back to the bottom → re-enable auto-scroll.
                 if (atBottom) {
-                    autoScrollEnabledRef.current = true;
+                    shouldAutoScrollRef.current = true;
                     setShowMoreBelow(false);
                 }
             }
@@ -284,7 +282,7 @@ export default function App() {
         }
 
         // Sync scroller for the OTHER box
-        if (other && !isAutoScrolling.current) {
+        if (other && !shouldAutoScrollRef.current) {
             const scrollRatio = scrollTop / (scrollHeight - clientHeight || 1);
             const otherHeight = other.scrollHeight;
             const otherClient = other.clientHeight;
@@ -292,7 +290,7 @@ export default function App() {
         }
 
         if (activePopover) {
-            if (!isAutoScrolling.current) {
+            if (!shouldAutoScrollRef.current) {
                 setActivePopover(null);
                 setPopoverRect(null);
             } else {
@@ -302,47 +300,36 @@ export default function App() {
     };
 
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
-        isAutoScrolling.current = true;
-        autoScrollEnabledRef.current = true;
+        shouldAutoScrollRef.current = true;
         setShowMoreBelow(false);
         const scrollOptsEn = { top: scrollRefEn.current?.scrollHeight, behavior };
         const scrollOptsOrig = { top: scrollRefOrig.current?.scrollHeight, behavior };
 
         scrollRefEn.current?.scrollTo(scrollOptsEn);
         scrollRefOrig.current?.scrollTo(scrollOptsOrig);
-
-        if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current);
-        scrollTimeoutRef.current = window.setTimeout(() => {
-            isAutoScrolling.current = false;
-        }, 350);
     };
 
     const initialScrollDoneRef = useRef(false);
 
-    // Auto-scroll effect after render
+    // Auto-scroll layout effect
     useEffect(() => {
-        let doScroll = false;
-        let behavior: ScrollBehavior = 'smooth';
+        // If the user hasn't explicitly scrolled up, anchor to the bottom.
+        if (shouldAutoScrollRef.current) {
+            const frameId = requestAnimationFrame(() => {
+                if (!initialScrollDoneRef.current && spans.length > 0) {
+                    initialScrollDoneRef.current = true;
+                }
 
-        if (spans.length > 0 && !initialScrollDoneRef.current) {
-            doScroll = true;
-            behavior = 'auto'; // Instant scroll for initial load
-            initialScrollDoneRef.current = true;
-            shouldAutoScrollRef.current = false;
-        } else if (shouldAutoScrollRef.current) {
-            doScroll = true;
-            behavior = 'smooth';
-            shouldAutoScrollRef.current = false;
+                if (scrollRefEn.current) {
+                    scrollRefEn.current.scrollTop = scrollRefEn.current.scrollHeight;
+                }
+                if (scrollRefOrig.current) {
+                    scrollRefOrig.current.scrollTop = scrollRefOrig.current.scrollHeight;
+                }
+            });
+            return () => cancelAnimationFrame(frameId);
         }
-
-        if (doScroll) {
-            // A short timeout ensures React paints the DOM changes before calculating height
-            const timer = setTimeout(() => {
-                scrollToBottom(behavior);
-            }, 50);
-            return () => clearTimeout(timer);
-        }
-    }, [spans, draftTextEn, draftTextOrig]);
+    }, [spans, draftTextEn, draftTextOrig, window.innerHeight]);
 
     // Tap outside to dismiss
     useEffect(() => {
@@ -371,12 +358,10 @@ export default function App() {
     // Update position on window resize
     useEffect(() => {
         const handleResize = () => {
-            isAutoScrolling.current = true;
             updatePopoverPosition();
-            if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-            scrollTimeoutRef.current = window.setTimeout(() => {
-                isAutoScrolling.current = false;
-            }, 100);
+            if (shouldAutoScrollRef.current) {
+                scrollToBottom('auto');
+            }
         };
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
@@ -460,14 +445,14 @@ export default function App() {
         };
 
         ws.onmessage = (event) => {
-            const wasAtBottom = autoScrollEnabledRef.current;
 
             try {
                 const payload = JSON.parse(event.data);
 
                 // Handle server-push status updates
                 if (payload.type === 'status') {
-                    setSonioxActive(payload.soniox_active ?? false);
+                    setSonioxActivated(payload.soniox_activated ?? false);
+                    setSonioxConnected(payload.soniox_connected ?? false);
                     return;
                 }
 
@@ -597,9 +582,11 @@ export default function App() {
                     setDraftTextEn(newDraftEn);
 
                     // Handle auto-scroll or "more below" indicator
-                    if (wasAtBottom) {
-                        shouldAutoScrollRef.current = true;
+                    if (shouldAutoScrollRef.current) {
+                        // We are actively anchored to bottom; the useEffect will handle DOM scrolling.
+                        setShowMoreBelow(false);
                     } else if (newDraftEn || incomingSpans.length > 0) {
+                        // We are scrolling up, and new text arrived. Emphasize More Below.
                         setShowMoreBelow(true);
                     }
                 }
@@ -799,8 +786,10 @@ export default function App() {
 
                     <div className="flex items-center space-x-2 shrink-0">
                         <span className="text-gray-500 dark:text-gray-400 font-medium text-sm">Status:</span>
-                        {connectionState === 'connecting' && !hasConnectedOnce && <span className="text-yellow-500 font-medium select-none">Connecting...</span>}
-                        {connectionState === 'connected' && sonioxActive && (
+                        {(connectionState === 'connecting' && !hasConnectedOnce) || (connectionState === 'connected' && sonioxActivated && !sonioxConnected) ? (
+                            <span className="text-yellow-500 font-medium select-none">Connecting...</span>
+                        ) : null}
+                        {connectionState === 'connected' && sonioxActivated && sonioxConnected && (
                             <span
                                 className="relative group cursor-default text-emerald-500 font-medium flex items-center gap-1.5 select-none z-10"
                                 style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
@@ -816,7 +805,7 @@ export default function App() {
                                 </span>
                             </span>
                         )}
-                        {connectionState === 'connected' && !sonioxActive && (
+                        {connectionState === 'connected' && !sonioxActivated && (
                             <span
                                 className="relative group cursor-default text-yellow-500 font-medium select-none z-10"
                                 style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}

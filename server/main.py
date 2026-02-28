@@ -12,7 +12,7 @@ See lessons.md for detailed bug history and design rationale.
 """
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Header
 import pyaudio
-from typing import Optional
+from typing import Optional, Union
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
@@ -168,7 +168,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # This prevents the client from showing "Stand By" briefly before the first
     # broadcast arrives.
     try:
-        await websocket.send_json({"type": "status", "soniox_active": session_state.soniox_active})
+        await websocket.send_json({"type": "status", "soniox_activated": session_state.soniox_activated, "soniox_connected": session_state.soniox_connected})
     except Exception:
         pass
 
@@ -200,9 +200,11 @@ async def get_health():
         "status": "online",
         "audio_live": audio_is_live,
         "soniox_connected": session_state.soniox_connected,
-        "soniox_active": session_state.soniox_active,
+        "soniox_activated": session_state.soniox_activated,
         "active_clients": len(manager.active_connections),
-        "active_admins": len(manager.admin_connections)
+        "active_admins": len(manager.admin_connections),
+        "audio_device_index": session_state.audio_device_index,
+        "audio_device_channels": session_state.audio_device_channels
     }
 
 # --- Admin API Endpoints ---
@@ -278,13 +280,17 @@ async def verify_admin(authorization: str = Header(None)):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid session token")
 
-class SonioxToggleReq(BaseModel):
+class SessionToggleReq(BaseModel):
     active: bool
+    session_name: Optional[str] = None
 
-@app.post("/api/admin/soniox/toggle")
-async def toggle_soniox(req: SonioxToggleReq, _=Depends(verify_admin)):
+@app.post("/api/admin/session/toggle")
+async def toggle_session(req: SessionToggleReq, _=Depends(verify_admin)):
     # Start task
     if req.active and not getattr(app.state, "soniox_task", None):
+        if not req.session_name:
+            raise HTTPException(status_code=400, detail="session_name is required to start a session")
+            
         # Empty queue first
         while not app.state.audio_queue_a.empty():
             try:
@@ -292,23 +298,113 @@ async def toggle_soniox(req: SonioxToggleReq, _=Depends(verify_admin)):
             except asyncio.QueueEmpty:
                 break
                 
-        session_state.soniox_active = True
+        session_state.soniox_activated = True
+        session_state.current_session_name = req.session_name
+        
         app.state.soniox_task = asyncio.create_task(
             soniox_translation_task(app.state.audio_queue_a, manager, session_state)
         )
-        await manager.broadcast({"type": "status", "soniox_active": True})
-        return {"status": "started"}
+        await manager.broadcast({"type": "status", "soniox_activated": True, "soniox_connected": session_state.soniox_connected})
+        return {"status": "started", "session_name": session_state.current_session_name}
         
     # Stop task
     elif not req.active and getattr(app.state, "soniox_task", None):
-        session_state.soniox_active = False
+        session_state.soniox_activated = False
+        
+        # Dispatch background MP3 conversion task if we had a session name
+        if session_state.current_session_name:
+            # We delay the import or logic of conversion to avoid blocking here.
+            # We'll create a background task or just let the main loop hand it off.
+            asyncio.create_task(convert_session_audio(session_state.current_session_name))
+            session_state.current_session_name = None
+            
         app.state.soniox_task.cancel()
         app.state.soniox_task = None
         session_state.soniox_connected = False
-        await manager.broadcast({"type": "status", "soniox_active": False})
+        await manager.broadcast({"type": "status", "soniox_activated": False, "soniox_connected": False})
         return {"status": "stopped"}
         
     return {"status": "no_change"}
+
+async def convert_session_audio(session_name: str):
+    """Background task to convert raw PCM audio to MP3 (or WAV as fallback).
+    
+    If FFmpeg is available, converts to .mp3 for smaller file sizes.
+    If FFmpeg is not found, falls back to .wav using Python's built-in wave module.
+    """
+    try:
+        from datetime import datetime
+        import shutil
+        import subprocess
+        import wave
+        
+        # Reconstruct exactly what audio_ingest uses for the directory
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        save_dir = os.environ.get("AUDIO_SAVE_DIR", "audio_recordings")
+        day_dir = os.path.join(save_dir, date_str)
+        
+        import glob
+        pattern = os.path.join(day_dir, f"recording-{session_name}-*.pcm")
+        files = glob.glob(pattern)
+        
+        if not files:
+            logger.warning(f"No PCM files found matching '{pattern}' to convert.")
+            return
+        
+        num_channels = max(session_state.audio_device_channels, 1)
+        ffmpeg_path = shutil.which("ffmpeg")
+            
+        for pcm_file in files:
+            if ffmpeg_path:
+                # --- FFmpeg path: convert to .mp3 ---
+                mp3_file = pcm_file.replace(".pcm", ".mp3")
+                if os.path.exists(mp3_file):
+                    logger.info(f"Skipping {pcm_file}, {mp3_file} already exists.")
+                    continue
+                cmd = [
+                    ffmpeg_path,
+                    "-y",
+                    "-f", "s16le",
+                    "-ar", "16000",
+                    "-ac", str(num_channels),
+                    "-i", pcm_file,
+                    "-codec:a", "libmp3lame",
+                    "-qscale:a", "2",
+                    mp3_file
+                ]
+                
+                logger.info(f"Converting {pcm_file} to MP3 (channels={num_channels})...")
+                result = await asyncio.to_thread(
+                    subprocess.run, cmd,
+                    capture_output=True, text=True
+                )
+                
+                if result.returncode == 0:
+                    logger.info(f"Successfully converted to {mp3_file}")
+                else:
+                    logger.error(f"FFmpeg conversion failed: {result.stderr}")
+            else:
+                # --- Fallback: convert to .wav using Python's wave module ---
+                wav_file = pcm_file.replace(".pcm", ".wav")
+                if os.path.exists(wav_file):
+                    logger.info(f"Skipping {pcm_file}, {wav_file} already exists.")
+                    continue
+                logger.info(f"FFmpeg not found. Converting {pcm_file} to WAV (channels={num_channels})...")
+                
+                def _write_wav():
+                    with open(pcm_file, "rb") as f_in:
+                        pcm_data = f_in.read()
+                    with wave.open(wav_file, "wb") as wf:
+                        wf.setnchannels(num_channels)
+                        wf.setsampwidth(2)  # 16-bit = 2 bytes
+                        wf.setframerate(16000)
+                        wf.writeframes(pcm_data)
+                
+                await asyncio.to_thread(_write_wav)
+                logger.info(f"Successfully converted to {wav_file}")
+                
+    except Exception as e:
+        logger.error(f"Error converting session audio: {e}")
 
 @app.get("/api/admin/token")
 async def get_token(_=Depends(verify_admin)):
@@ -391,7 +487,12 @@ async def get_audio_devices(_=Depends(verify_admin)):
             
     p.terminate()
     
+    # Prepend the "Disabled" pseudo-device
     devices = [
+        {"index": -1, "name": "Disabled", "channels": 0, "defaultSampleRate": 0}
+    ]
+    
+    unique_list = [
         {
             "index": d["index"], 
             "name": d["name"], 
@@ -400,16 +501,26 @@ async def get_audio_devices(_=Depends(verify_admin)):
         } 
         for d in unique_devices.values()
     ]
-    devices.sort(key=lambda x: x["index"])
+    unique_list.sort(key=lambda x: x["index"])
+    devices.extend(unique_list)
+    
+    # Scan audio_samples directory for audio files
+    audio_files = []
+    samples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "audio_samples")
+    if os.path.exists(samples_dir):
+        for f in os.listdir(samples_dir):
+            if f.endswith(('.wav', '.mp3')):
+                audio_files.append(f)
     
     return {
         "devices": devices, 
+        "audio_files": audio_files,
         "active_device_index": session_state.audio_device_index,
         "active_channels": session_state.audio_device_channels
     }
 
 class AudioDeviceUpdateReq(BaseModel):
-    device_index: Optional[int] = None
+    device_index: Optional[Union[int, str]] = None
 
 @app.post("/api/admin/audio-device")
 async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)):
@@ -427,13 +538,18 @@ async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)
     
     # Look up channel count for stereo downmix decision (Lesson #4)
     if req.device_index is not None:
-        p = pyaudio.PyAudio()
-        try:
-            info = p.get_device_info_by_index(req.device_index)
-            session_state.audio_device_channels = info.get('maxInputChannels', 1)
-        except:
-            pass
-        p.terminate()
+        if isinstance(req.device_index, str) and req.device_index.startswith("file:"):
+            session_state.audio_device_channels = 1
+        elif isinstance(req.device_index, int) and req.device_index >= 0:
+            p = pyaudio.PyAudio()
+            try:
+                info = p.get_device_info_by_index(req.device_index)
+                session_state.audio_device_channels = info.get('maxInputChannels', 1)
+            except:
+                pass
+            p.terminate()
+        else: # e.g. -1 for Disabled
+            session_state.audio_device_channels = 0
     else:
         session_state.audio_device_channels = 1
     
@@ -467,6 +583,15 @@ async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)
         app.state.soniox_task = asyncio.create_task(
             soniox_translation_task(app.state.audio_queue_a, manager, session_state)
         )
+    
+    # Step 6: Broadcast the device change to all connected admins
+    await manager.broadcast({
+        "type": "status",
+        "soniox_activated": session_state.soniox_activated,
+        "soniox_connected": session_state.soniox_connected,
+        "audio_device_index": session_state.audio_device_index,
+        "audio_device_channels": session_state.audio_device_channels
+    })
     
     return {
         "status": "success", 

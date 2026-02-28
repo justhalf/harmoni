@@ -77,7 +77,7 @@ describe('AdminApp Login', () => {
             json: () => Promise.resolve({
                 status: 'online',
                 soniox_connected: false,
-                soniox_active: false,
+                soniox_activated: false,
                 active_clients: 0,
                 active_admins: 0,
                 audio_alive: false,

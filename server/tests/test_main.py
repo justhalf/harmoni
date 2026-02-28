@@ -19,7 +19,7 @@ from main import app, session_state, manager
 def reset_session_state():
     """Reset global session state before each test to prevent leakage."""
     session_state.admin_token = "blue-ocean-42"
-    session_state.soniox_active = False
+    session_state.soniox_activated = False
     session_state.soniox_connected = False
     session_state.audio_device_index = None
     session_state.audio_device_channels = 1
@@ -110,18 +110,18 @@ class TestHealth:
         assert "status" in data
         assert data["status"] == "online"
         assert "soniox_connected" in data
-        assert "soniox_active" in data
+        assert "soniox_activated" in data
         assert "active_clients" in data
         assert "active_admins" in data
 
     @pytest.mark.asyncio
     async def test_health_reflects_soniox_state(self, client):
-        """Health should reflect current soniox_active state."""
-        session_state.soniox_active = True
+        """Health should reflect current soniox_activated state."""
+        session_state.soniox_activated = True
         session_state.soniox_connected = True
         res = await client.get("/health")
         data = res.json()
-        assert data["soniox_active"] is True
+        assert data["soniox_activated"] is True
         assert data["soniox_connected"] is True
 
 
@@ -253,15 +253,15 @@ class TestVerifyAdmin:
 
 
 # ============================================================
-# POST /api/admin/soniox/toggle (requires admin auth)
+# POST /api/admin/session/toggle (requires admin auth)
 # ============================================================
 
-class TestSonioxToggle:
-    """Tests for starting/stopping the Soniox translation task."""
+class TestSessionToggle:
+    """Tests for starting/stopping the Soniox translation session task."""
 
     @pytest.mark.asyncio
     async def test_toggle_on_starts_task(self, client, admin_token):
-        """Toggling Soniox on should set soniox_active and return 'started'."""
+        """Toggling Soniox on should set soniox_activated and return 'started'."""
         # Mock the audio queue and soniox task so we don't actually start them
         app.state.audio_queue_a = asyncio.Queue(maxsize=100)
         app.state.soniox_task = None
@@ -270,39 +270,40 @@ class TestSonioxToggle:
             with patch("main.asyncio.create_task") as mock_create:
                 mock_create.return_value = MagicMock()
                 res = await client.post(
-                    "/api/admin/soniox/toggle",
+                    "/api/admin/session/toggle",
                     headers={"Authorization": f"Bearer {admin_token}"},
-                    json={"active": True}
+                    json={"active": True, "session_name": "KU1"}
                 )
         assert res.status_code == 200
         assert res.json()["status"] == "started"
-        assert session_state.soniox_active is True
+        assert session_state.soniox_activated is True
+        assert session_state.current_session_name == "KU1"
 
     @pytest.mark.asyncio
     async def test_toggle_off_stops_task(self, client, admin_token):
         """Toggling Soniox off should cancel the task and return 'stopped'."""
         mock_task = MagicMock()
         app.state.soniox_task = mock_task
-        session_state.soniox_active = True
+        session_state.soniox_activated = True
 
         res = await client.post(
-            "/api/admin/soniox/toggle",
+            "/api/admin/session/toggle",
             headers={"Authorization": f"Bearer {admin_token}"},
             json={"active": False}
         )
         assert res.status_code == 200
         assert res.json()["status"] == "stopped"
-        assert session_state.soniox_active is False
+        assert session_state.soniox_activated is False
         mock_task.cancel.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_toggle_no_change(self, client, admin_token):
         """Toggling to the current state should return 'no_change'."""
         app.state.soniox_task = None
-        session_state.soniox_active = False
+        session_state.soniox_activated = False
 
         res = await client.post(
-            "/api/admin/soniox/toggle",
+            "/api/admin/session/toggle",
             headers={"Authorization": f"Bearer {admin_token}"},
             json={"active": False}
         )

@@ -9,7 +9,7 @@ Key design decisions:
   lifecycle management with dead-connection cleanup on every broadcast.
 """
 from pydantic import BaseModel
-from typing import Optional, List, Set, Dict
+from typing import Optional, List, Set, Dict, Union
 from fastapi import WebSocket
 from dataclasses import dataclass
 import hashlib
@@ -41,8 +41,9 @@ class ActiveSession(BaseModel):
     # in the /health endpoint. If the gap exceeds 5 seconds, audio is considered dead.
     audio_last_received_ts: float = 0.0
     soniox_connected: bool = False
-    soniox_active: bool = False  # True only when admin explicitly enables translation
-    audio_device_index: Optional[int] = None
+    soniox_activated: bool = False  # True only when admin explicitly enables translation
+    current_session_name: Optional[str] = None # Captures the active "KU1" / "Custom" name for the recordings
+    audio_device_index: Optional[Union[int, str]] = None
     # Channel count is stored so audio_ingest can downmix stereo→mono for Soniox.
     # See Lesson #4: Some USB mics report maxInputChannels > 1; Soniox expects mono PCM.
     audio_device_channels: int = 1

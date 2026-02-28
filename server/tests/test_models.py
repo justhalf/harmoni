@@ -16,7 +16,7 @@ class TestActiveSession:
     def test_default_soniox_state(self):
         """Soniox should be inactive and disconnected by default."""
         session = ActiveSession()
-        assert session.soniox_active is False
+        assert session.soniox_activated is False
         assert session.soniox_connected is False
 
     def test_default_audio_config(self):

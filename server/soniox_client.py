@@ -169,6 +169,12 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                         audio_queue.get_nowait()
                     except asyncio.QueueEmpty:
                         break
+                
+                await manager.broadcast({
+                    "type": "status",
+                    "soniox_activated": session.soniox_activated,
+                    "soniox_connected": True
+                })
                         
                 async def send_audio():
                     while True:
@@ -197,6 +203,11 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                             await manager.broadcast(payload)
                             
                             if event.finished:
+                                await manager.broadcast({
+                                    "type": "status",
+                                    "soniox_activated": session.soniox_activated,
+                                    "soniox_connected": True
+                                })
                                 logger.info("Soniox session finished gracefully.")
                                 break
                                 
@@ -212,7 +223,21 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                     receive_text()
                 )
                 
+        except asyncio.CancelledError:
+            logger.info("Soniox translation task cancelled")
+            session.soniox_connected = False
+            await manager.broadcast({
+                "type": "status",
+                "soniox_activated": session.soniox_activated,
+                "soniox_connected": False
+            })
+            raise
         except Exception as e:
             session.soniox_connected = False
+            await manager.broadcast({
+                "type": "status",
+                "soniox_activated": session.soniox_activated,
+                "soniox_connected": False
+            })
             logger.warning(f"Soniox connection dropped: {e}. Retrying in 5s...")
             await asyncio.sleep(5)
