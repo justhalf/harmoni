@@ -238,7 +238,11 @@ export default function AdminApp() {
 
     const handleLiveTranscriptionEvent = (payload: any) => {
         if (payload.type === 'status') {
-            setStats(prev => ({ ...prev, active: payload.soniox_active ?? prev.active }));
+            setStats(prev => ({
+                ...prev,
+                active: payload.soniox_active ?? prev.active,
+                ...(!payload.soniox_active ? { online: false } : {})
+            }));
         } else if (payload.type === 'health') {
             setStats(prev => ({ ...prev, clients: payload.active_clients ?? prev.clients, admins: payload.active_admins ?? prev.admins }));
         }
@@ -248,7 +252,11 @@ export default function AdminApp() {
         const newActiveState = !stats.active;
         // OPTIMISTIC UI: Update the toggle visually before the server responds.
         // If the request fails, the next health poll (5s) will correct the state.
-        setStats(prev => ({ ...prev, active: newActiveState }));
+        setStats(prev => ({
+            ...prev,
+            active: newActiveState,
+            ...(!newActiveState ? { online: false } : {})
+        }));
         try {
             await fetchWithAuth('/api/admin/soniox/toggle', {
                 method: 'POST',
@@ -393,23 +401,53 @@ export default function AdminApp() {
 
                 {/* Header & Stats Strip */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-col items-center justify-center relative overflow-hidden group">
+                    <div className="bg-slate-800/40 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-slate-700/50 flex flex-row items-center justify-center relative overflow-hidden group">
                         <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                        <span className="text-slate-400 text-sm font-medium mb-3 uppercase tracking-wider">Translation API</span>
 
-                        <div className="flex items-center gap-3 mb-3 z-10">
-                            <span className="text-xs font-semibold text-slate-500 w-6 text-right">{stats.active ? 'ON' : 'OFF'}</span>
-                            <button
-                                onClick={toggleSoniox}
-                                disabled={!serverReachable}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${stats.active ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-slate-600 hover:bg-slate-500'}`}
-                            >
-                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${stats.active ? 'translate-x-6' : 'translate-x-1'}`} />
-                            </button>
+                        {/* Left Side: Server Status */}
+                        <div className="flex flex-col flex-1 items-center justify-center border-r border-slate-700/50 pr-4 z-10 w-1/2">
+                            <span className="text-slate-400 text-xs sm:text-sm font-medium mb-3 uppercase tracking-wider text-center">Server Status</span>
+                            <div className="flex items-center justify-center w-full h-8">
+                                {!serverReachable ? (
+                                    <span className="relative group cursor-default text-rose-500 text-sm sm:text-base font-medium tracking-wide select-none flex items-center">
+                                        <span>Offline</span>
+                                    </span>
+                                ) : stats.active && !stats.online ? (
+                                    <span className="text-yellow-500 text-sm sm:text-base font-medium tracking-wide select-none">Connecting...</span>
+                                ) : stats.active && stats.online ? (
+                                    <span className="relative group cursor-default text-emerald-500 text-sm sm:text-base font-medium tracking-wide select-none flex items-center gap-1.5">
+                                        <span className="relative flex h-2.5 w-2.5 shrink-0">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                                        </span>
+                                        <span>Live</span>
+                                    </span>
+                                ) : (
+                                    <span className="relative group cursor-default text-yellow-500 text-sm sm:text-base font-medium tracking-wide select-none flex items-center">
+                                        <span>● Stand By</span>
+                                    </span>
+                                )}
+                            </div>
                         </div>
 
-                        <div className={`text-xl font-bold tracking-tight select-none ${stats.online ? 'text-emerald-400' : 'text-slate-500'}`}>
-                            {stats.online ? 'CONNECTED' : 'STANDBY'}
+                        {/* Right Side: Translation Toggle */}
+                        <div className="flex flex-col flex-1 items-center justify-center pl-4 z-10 w-1/2">
+                            <span className="text-slate-400 text-xs sm:text-sm font-medium mb-3 uppercase tracking-wider text-center">Translation</span>
+
+                            <div className="flex items-center justify-center gap-2 mb-1 w-full relative">
+                                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 w-4 sm:w-6 text-right">{stats.active ? 'ON' : 'OFF'}</span>
+                                <button
+                                    onClick={toggleSoniox}
+                                    disabled={!serverReachable}
+                                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${!serverReachable ? 'opacity-50 cursor-not-allowed' : ''} ${stats.active ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-slate-600 hover:bg-slate-500'}`}
+                                >
+                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${stats.active ? 'translate-x-6' : 'translate-x-1'}`} />
+                                </button>
+                            </div>
+
+                            <div className={`text-sm sm:text-base font-bold tracking-tight select-none mt-1 h-6 flex items-center ${stats.active ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                {stats.active ? 'ACTIVE' : 'INACTIVE'}
+                            </div>
                         </div>
                     </div>
 

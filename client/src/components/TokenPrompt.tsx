@@ -46,7 +46,7 @@ export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }:
                         <span className="relative group cursor-default text-sm text-green-500 font-medium">
                             ● Server Online
                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
-                                The server is running. Enter your token to connect.
+                                The server is running. Enter your passphrase to connect.
                             </span>
                         </span>
                     )}
@@ -63,7 +63,7 @@ export default function TokenPrompt({ onTokenSubmit, error, isLoading = false }:
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
                         <label htmlFor="token" className="block text-sm font-medium text-gray-700 mb-1">
-                            Enter Today's Session Token
+                            Enter Today's Session Passphrase
                         </label>
                         <input
                             id="token"
