@@ -51,7 +51,6 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
         return (localStorage.getItem('adminFontSize') as FontSize) || 'regular';
     });
     const [showMoreBelow, setShowMoreBelow] = useState(false);
-    const [isInitialLoad, setIsInitialLoad] = useState(false);
 
     // Admin uses dark mode by default, but we can allow toggling it back to light/slate
     const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -249,22 +248,32 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
         }, 350);
     };
 
+    const initialScrollDoneRef = useRef(false);
+
     // Auto-scroll effect after render
     useEffect(() => {
-        if (shouldAutoScrollRef.current || isInitialLoad) {
-            const isInit = isInitialLoad;
+        let doScroll = false;
+        let behavior: ScrollBehavior = 'smooth';
 
-            // Synchronously clear flags so they don't leak if the effect re-runs
+        if (spans.length > 0 && !initialScrollDoneRef.current) {
+            doScroll = true;
+            behavior = 'auto'; // Instant scroll for initial load
+            initialScrollDoneRef.current = true;
             shouldAutoScrollRef.current = false;
-            if (isInit) setIsInitialLoad(false);
+        } else if (shouldAutoScrollRef.current) {
+            doScroll = true;
+            behavior = 'smooth';
+            shouldAutoScrollRef.current = false;
+        }
 
+        if (doScroll) {
+            // A short timeout ensures React paints the DOM changes before calculating height
             const timer = setTimeout(() => {
-                scrollToBottom(isInit ? 'auto' : 'smooth');
-            }, isInit ? 300 : 50);
-
+                scrollToBottom(behavior);
+            }, 50);
             return () => clearTimeout(timer);
         }
-    }, [spans, draftTextEn, draftTextOrig, isInitialLoad]);
+    }, [spans, draftTextEn, draftTextOrig]);
 
     // Update position whenever activePopover changes, or on window resize
     useEffect(() => {
@@ -313,10 +322,13 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [activePopover, isDisplayMenuOpen]);
 
+    const hasLoadedFromStorageRef = useRef(false);
+
     // Initial load from localStorage - only runs ONCE when refs are ready
     useEffect(() => {
         if (!scrollRefEn.current) return;
-        if (isInitialLoad) return; // Only do this once
+        if (hasLoadedFromStorageRef.current) return; // Only do this once
+        hasLoadedFromStorageRef.current = true;
 
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
@@ -338,7 +350,6 @@ export default function LiveTranscription({ sessionToken, onEvent }: LiveTranscr
                             isSystemMessage: true
                         };
                         setSpans([...filteredSpans, indicatorSpan]);
-                        setIsInitialLoad(true);
                     }
                 } else {
                     localStorage.removeItem(STORAGE_KEY);
