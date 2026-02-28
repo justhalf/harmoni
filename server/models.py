@@ -12,7 +12,14 @@ from pydantic import BaseModel
 from typing import Optional, List, Set, Dict
 from fastapi import WebSocket
 from dataclasses import dataclass
+import hashlib
+import os
 import logging
+
+def get_jwt_secret() -> str:
+    """Generate a stable JWT secret from the admin password."""
+    pwd = os.environ.get("ADMIN_PASSWORD", "dev-secret")
+    return hashlib.sha256(pwd.encode()).hexdigest()
 
 logger = logging.getLogger("harmoni")
 
@@ -43,10 +50,9 @@ class ActiveSession(BaseModel):
     # the ingest loop to break cleanly on the next iteration, avoiding segfaults
     # from cancelling a blocking PyAudio C-level read. See Lesson #1.
     stop_audio_ingest: bool = False
-    # Set of opaque session tokens issued by POST /api/admin/login.
-    # Each token is a secrets.token_urlsafe(32) string. Multiple concurrent admin
-    # sessions are supported (e.g., two browser tabs).
-    admin_sessions: Set[str] = set()
+    # JWT signing secret. Derived from ADMIN_PASSWORD to ensure tokens
+    # survive server restarts. This reliably maintains the 12-hour refresh logic.
+    jwt_secret: str = get_jwt_secret()
     
 @dataclass
 class ConnectionManager:

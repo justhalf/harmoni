@@ -122,8 +122,38 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
                 nextStartTime += audioBuffer.duration;
             };
 
-            ws.onclose = () => {
+            ws.onclose = async (event) => {
                 setIsRendering(false);
+
+                // 1008 is our server's standard code for "invalid/expired session token"
+                if (event.code === 1008) {
+                    const refreshToken = localStorage.getItem('admin_refresh_token');
+                    if (refreshToken) {
+                        try {
+                            const refreshRes = await fetch('/api/admin/refresh', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ refresh_token: refreshToken })
+                            });
+
+                            if (refreshRes.ok) {
+                                // Wait a moment and try connecting again, this time the 
+                                // parent component will eventually pass down the new token 
+                                // via props, but we can also just rely on the prop updating 
+                                // to trigger a re-render. To avoid a race condition before 
+                                // React state updates:
+                                reconnectTimeout = setTimeout(connect, 1000);
+                                return;
+                            }
+                        } catch (e) {
+                            console.error("AudioVisualizer WS auto-refresh failed", e);
+                        }
+                    }
+                    // If no refresh token or refresh failed, stop retrying. The main AdminApp
+                    // polling will eventually hit a 401 and kick the user out properly.
+                    return;
+                }
+
                 reconnectTimeout = setTimeout(connect, 2000);
             };
 

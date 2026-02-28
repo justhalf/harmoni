@@ -55,9 +55,12 @@ export default function AdminApp() {
 
                 if (res.ok) {
                     const data = await res.json();
-                    if (data.admin_session_token) {
-                        const sToken = data.admin_session_token;
+                    if (data.access_token && data.refresh_token) {
+                        const sToken = data.access_token;
                         setAdminSessionToken(sToken);
+
+                        // Persist refresh token for auto-reconnects
+                        localStorage.setItem('admin_refresh_token', data.refresh_token);
 
                         // SECURITY: Clear the raw password from React state. From this
                         // point forward, only the opaque session token is used for auth.
@@ -79,9 +82,90 @@ export default function AdminApp() {
         }
     };
 
+    /**
+     * Intercepts 401 Unauthorized errors from fetch calls, attempts to refresh the access
+     * token via the stored refresh token, and retries the original request if successful.
+     */
+    const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
+        let res = await fetch(url, options);
+
+        if (res.status === 401) {
+            const refreshToken = localStorage.getItem('admin_refresh_token');
+            if (!refreshToken) {
+                handleLogout();
+                throw new Error("Session expired. No refresh token available.");
+            }
+
+            // Try refreshing the token
+            const refreshRes = await fetch('/api/admin/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: refreshToken })
+            });
+
+            if (refreshRes.ok) {
+                const refreshData = await refreshRes.json();
+                const newAccessToken = refreshData.access_token;
+
+                // Update React state safely (if it hasn't unmounted)
+                setAdminSessionToken(newAccessToken);
+
+                // Retry the original request with the *new* token
+                const newOptions = { ...options };
+                if (newOptions.headers) {
+                    (newOptions.headers as Record<string, string>)['Authorization'] = `Bearer ${newAccessToken}`;
+                }
+                return fetch(url, newOptions);
+            } else {
+                // Refresh failed (e.g. 12 hours expired or invalid)
+                handleLogout();
+                throw new Error("Session expired. Refresh failed.");
+            }
+        }
+
+        return res;
+    };
+
+    const handleLogout = () => {
+        setIsAuthenticated(false);
+        setAdminSessionToken('');
+        localStorage.removeItem('admin_refresh_token');
+    };
+
+    useEffect(() => {
+        // Auto-login if a refresh token exists on mount
+        const attemptAutoLogin = async () => {
+            const refreshToken = localStorage.getItem('admin_refresh_token');
+            if (refreshToken) {
+                try {
+                    const res = await fetch('/api/admin/refresh', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ refresh_token: refreshToken })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        setAdminSessionToken(data.access_token);
+                        setIsAuthenticated(true);
+                        // Wait a moment and try connecting again, this time the
+                        // parent component will eventually pass down the new token
+                        fetchStats(data.access_token);
+                        fetchInitialPassphrase(data.access_token);
+                    } else {
+                        localStorage.removeItem('admin_refresh_token');
+                    }
+                } catch (e) {
+                    // Silently fail on network error, user can manually login when it's back
+                    console.error("Auto-login failed:", e);
+                }
+            }
+        };
+        attemptAutoLogin();
+    }, []);
+
     const fetchInitialPassphrase = async (sToken: string) => {
         try {
-            const res = await fetch('/api/admin/token', {
+            const res = await fetchWithAuth('/api/admin/token', {
                 headers: { 'Authorization': `Bearer ${sToken}` }
             });
             if (res.ok) {
@@ -117,7 +201,7 @@ export default function AdminApp() {
         // If the request fails, the next health poll (5s) will correct the state.
         setStats(prev => ({ ...prev, active: newActiveState }));
         try {
-            await fetch('/api/admin/soniox/toggle', {
+            await fetchWithAuth('/api/admin/soniox/toggle', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -134,7 +218,7 @@ export default function AdminApp() {
     const fetchAudioDevices = async () => {
         if (!adminSessionToken) return;
         try {
-            const res = await fetch('/api/admin/audio-devices', {
+            const res = await fetchWithAuth('/api/admin/audio-devices', {
                 headers: { 'Authorization': `Bearer ${adminSessionToken}` }
             });
             if (res.ok) {
@@ -154,7 +238,7 @@ export default function AdminApp() {
         setSelectedAudioDevice(value === '' ? '' : parseInt(value, 10));
 
         try {
-            const res = await fetch('/api/admin/audio-device', {
+            const res = await fetchWithAuth('/api/admin/audio-device', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -188,7 +272,7 @@ export default function AdminApp() {
     const savePassphrase = async () => {
         setSaveStatus('saving');
         try {
-            const res = await fetch(API_ENDPOINT, {
+            const res = await fetchWithAuth(API_ENDPOINT, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${adminSessionToken}`,
@@ -250,9 +334,17 @@ export default function AdminApp() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                         </svg>
                     </div>
-                    <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
-                        GPBB Harmoni Admin Dashboard
-                    </h1>
+                    <div className="flex-1 flex justify-between items-center">
+                        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
+                            GPBB Harmoni Admin Dashboard
+                        </h1>
+                        <button
+                            onClick={handleLogout}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+                        >
+                            Log Out
+                        </button>
+                    </div>
                 </div>
 
                 {/* Header & Stats Strip */}

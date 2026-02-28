@@ -26,21 +26,7 @@ class TestActiveSession:
         assert session.audio_device_channels == 1
         assert session.stop_audio_ingest is False
 
-    def test_admin_sessions_empty_by_default(self):
-        """No admin sessions should exist before any login."""
-        session = ActiveSession()
-        assert len(session.admin_sessions) == 0
 
-    def test_admin_sessions_add_multiple(self):
-        """Multiple concurrent admin sessions should be supported."""
-        session = ActiveSession()
-        session.admin_sessions.add("token-1")
-        session.admin_sessions.add("token-2")
-        assert len(session.admin_sessions) == 2
-        assert "token-1" in session.admin_sessions
-        assert "token-2" in session.admin_sessions
-
-    def test_audio_last_received_ts_default(self):
         """audio_last_received_ts should default to 0.0 (no audio received yet)."""
         session = ActiveSession()
         assert session.audio_last_received_ts == 0.0

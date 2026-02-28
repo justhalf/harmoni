@@ -23,8 +23,9 @@ from soniox_client import soniox_translation_task
 from pydantic import BaseModel
 import os
 import logging
-import sys
+import jwt
 import secrets
+import sys
 from uvicorn.logging import DefaultFormatter
 
 # 1. Provide a timestamped formatter format
@@ -216,9 +217,7 @@ async def admin_login(req: AdminLoginReq):
     Uses secrets.compare_digest() for timing-safe string comparison to prevent
     timing attacks that could leak password length or character matches.
     
-    The returned session token is a cryptographically random URL-safe string
-    (secrets.token_urlsafe(32) = 43 characters). Multiple concurrent sessions
-    are supported (e.g., two admin browser tabs).
+    The returned session token is a cryptographically signed JWT.
     
     Security note (Lesson #11): The frontend MUST send the actual password to
     this endpoint and wait for a 200 OK before granting dashboard access.
@@ -226,17 +225,58 @@ async def admin_login(req: AdminLoginReq):
     and set isAuthenticated=true, completely bypassing server validation.
     """
     if secrets.compare_digest(req.password, ADMIN_PASSWORD):
-        new_session_token = secrets.token_urlsafe(32)
-        session_state.admin_sessions.add(new_session_token)
-        return {"admin_session_token": new_session_token}
+        access_exp = int(time.time()) + (15 * 60) # 15 minutes
+        refresh_exp = int(time.time()) + (12 * 60 * 60) # 12 hours
+        
+        access_token = jwt.encode(
+            {"role": "admin", "type": "access", "exp": access_exp}, 
+            session_state.jwt_secret, 
+            algorithm="HS256"
+        )
+        refresh_token = jwt.encode(
+            {"role": "admin", "type": "refresh", "exp": refresh_exp}, 
+            session_state.jwt_secret, 
+            algorithm="HS256"
+        )
+        return {"access_token": access_token, "refresh_token": refresh_token}
     raise HTTPException(status_code=401, detail="Invalid Admin Password")
+
+class AdminRefreshReq(BaseModel):
+    refresh_token: str
+
+@app.post("/api/admin/refresh")
+async def admin_refresh(req: AdminRefreshReq):
+    """Exchange a valid refresh token for a new access token (15m validity)."""
+    try:
+        payload = jwt.decode(req.refresh_token, session_state.jwt_secret, algorithms=["HS256"])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+            
+        access_exp = int(time.time()) + (15 * 60)
+        access_token = jwt.encode(
+            {"role": "admin", "type": "access", "exp": access_exp}, 
+            session_state.jwt_secret, 
+            algorithm="HS256"
+        )
+        return {"access_token": access_token}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
 async def verify_admin(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized Admin")
     token = authorization.split(" ")[1]
-    if token not in session_state.admin_sessions:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    
+    try:
+        payload = jwt.decode(token, session_state.jwt_secret, algorithms=["HS256"])
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Access token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid session token")
 
 class SonioxToggleReq(BaseModel):
     active: bool
@@ -444,10 +484,20 @@ async def admin_audio_viz(websocket: WebSocket):
         return
         
     token = auth_data.get("token")
-    # Requires an active session token on connection
-    if not token or token not in session_state.admin_sessions:
+    if not token:
         await websocket.close(code=1008)
         return
+        
+    try:
+        payload = jwt.decode(token, session_state.jwt_secret, algorithms=["HS256"])
+        if payload.get("type") != "access":
+            await websocket.close(code=1008)
+            return
+    except Exception:
+        # Catch expired or invalid signatures
+        await websocket.close(code=1008)
+        return
+        
     await manager.connect_viz(websocket)
     try:
         while True:

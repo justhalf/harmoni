@@ -21,19 +21,25 @@ def reset_session_state():
     session_state.admin_token = "blue-ocean-42"
     session_state.soniox_active = False
     session_state.soniox_connected = False
-    session_state.admin_sessions = set()
     session_state.audio_device_index = None
     session_state.audio_device_channels = 1
     session_state.stop_audio_ingest = False
     yield
-    session_state.admin_sessions = set()
 
 
 @pytest.fixture
 def admin_token():
-    """Create a valid admin session token for use in authenticated requests."""
-    token = "test-session-token-abc123"
-    session_state.admin_sessions.add(token)
+    """Create a valid admin session JWT for use in authenticated requests."""
+    import jwt
+    import time
+    from main import session_state
+    
+    access_exp = int(time.time()) + (15 * 60)
+    token = jwt.encode(
+        {"role": "admin", "type": "access", "exp": access_exp}, 
+        session_state.jwt_secret, 
+        algorithm="HS256"
+    )
     return token
 
 
@@ -53,15 +59,15 @@ class TestAdminLogin:
     """Tests for admin authentication endpoint."""
 
     @pytest.mark.asyncio
-    async def test_valid_password_returns_session_token(self, client):
-        """A correct admin password should return a session token."""
+    async def test_valid_password_returns_session_tokens(self, client):
+        """A correct admin password should return an access and refresh token pair."""
         res = await client.post("/api/admin/login", json={"password": "test-admin-password"})
         assert res.status_code == 200
         data = res.json()
-        assert "admin_session_token" in data
-        assert len(data["admin_session_token"]) > 0
-        # Verify the token was registered in session state
-        assert data["admin_session_token"] in session_state.admin_sessions
+        assert "access_token" in data
+        assert "refresh_token" in data
+        assert len(data["access_token"]) > 0
+        assert len(data["refresh_token"]) > 0
 
     @pytest.mark.asyncio
     async def test_invalid_password_returns_401(self, client):
@@ -77,14 +83,15 @@ class TestAdminLogin:
 
     @pytest.mark.asyncio
     async def test_multiple_logins_create_separate_tokens(self, client):
-        """Each login should create a unique session token."""
+        """Each login should create uniquely signed session tokens."""
+        # Due to temporal signing timestamps, successive calls should be unique
+        # We sleep for 1.1s to ensure the integer `exp` timestamp ticks over.
         res1 = await client.post("/api/admin/login", json={"password": "test-admin-password"})
+        await asyncio.sleep(1.1)
         res2 = await client.post("/api/admin/login", json={"password": "test-admin-password"})
-        token1 = res1.json()["admin_session_token"]
-        token2 = res2.json()["admin_session_token"]
+        token1 = res1.json()["access_token"]
+        token2 = res2.json()["access_token"]
         assert token1 != token2
-        assert token1 in session_state.admin_sessions
-        assert token2 in session_state.admin_sessions
 
 
 # ============================================================
