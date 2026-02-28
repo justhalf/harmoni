@@ -421,6 +421,13 @@ async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)
         audio_ingest_task(app.state.audio_queue_a, app.state.audio_queue_b, session_state)
     )
     
+    # Step 5: Restart Soniox task if running to apply new channel count
+    if getattr(app.state, "soniox_task", None):
+        app.state.soniox_task.cancel()
+        app.state.soniox_task = asyncio.create_task(
+            soniox_translation_task(app.state.audio_queue_a, manager, session_state)
+        )
+    
     return {
         "status": "success", 
         "active_device_index": session_state.audio_device_index,

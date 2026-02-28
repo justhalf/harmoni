@@ -102,7 +102,9 @@ class TestConnectionManager:
         """Dead connections (raised exceptions) should be removed after broadcast."""
         alive_ws = AsyncMock()
         dead_ws = AsyncMock()
-        dead_ws.send_json.side_effect = Exception("Connection closed")
+        async def raise_conn_closed(*args, **kwargs):
+            raise Exception("Connection closed")
+        dead_ws.send_json.side_effect = raise_conn_closed
 
         await manager.connect(alive_ws, is_admin=False)
         await manager.connect(dead_ws, is_admin=False)

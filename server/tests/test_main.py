@@ -261,7 +261,7 @@ class TestSonioxToggle:
 
         with patch("main.soniox_translation_task", new_callable=AsyncMock):
             with patch("main.asyncio.create_task") as mock_create:
-                mock_create.return_value = AsyncMock()
+                mock_create.return_value = MagicMock()
                 res = await client.post(
                     "/api/admin/soniox/toggle",
                     headers={"Authorization": f"Bearer {admin_token}"},
@@ -301,3 +301,73 @@ class TestSonioxToggle:
         )
         assert res.status_code == 200
         assert res.json()["status"] == "no_change"
+
+# ============================================================
+# POST /api/admin/audio-device (requires admin auth)
+# ============================================================
+
+class TestUpdateAudioDevice:
+    """Tests for changing the active audio input device."""
+
+    @pytest.mark.asyncio
+    async def test_update_audio_device_stops_and_starts_ingest_task(self, client, admin_token):
+        """Updating device should signal cooperative shutdown and restart ingest task."""
+        mock_ingest_task = AsyncMock()
+        app.state.audio_ingest_task = mock_ingest_task
+        app.state.soniox_task = None
+        app.state.audio_queue_a = asyncio.Queue(maxsize=1)
+        app.state.audio_queue_b = asyncio.Queue(maxsize=1)
+        session_state.audio_device_index = None
+
+        with patch("main.audio_ingest_task", new_callable=AsyncMock) as mock_task_func:
+            with patch("main.pyaudio.PyAudio"):
+                with patch("main.asyncio.create_task") as mock_create:
+                    mock_create.return_value = MagicMock()
+                    res = await client.post(
+                        "/api/admin/audio-device",
+                        headers={"Authorization": f"Bearer {admin_token}"},
+                        json={"device_index": 2}
+                    )
+
+        assert res.status_code == 200
+        assert res.json()["status"] == "success"
+        
+        # Verify cooperative shutdown flow
+        assert session_state.stop_audio_ingest is False # should be reset to False
+        # A new task should have been created
+        mock_create.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_update_audio_device_restarts_soniox_task_if_active(self, client, admin_token):
+        """Updating device must restart Soniox task to propagate new num_channels."""
+        app.state.audio_ingest_task = MagicMock()
+        mock_soniox_task = MagicMock()
+        # Mock cancel on the task object
+        mock_soniox_task.cancel = MagicMock()
+        app.state.soniox_task = mock_soniox_task
+        app.state.audio_queue_a = asyncio.Queue(maxsize=1)
+        app.state.audio_queue_b = asyncio.Queue(maxsize=1)
+
+        with patch("main.audio_ingest_task", new_callable=AsyncMock), \
+             patch("main.soniox_translation_task", new_callable=AsyncMock), \
+             patch("main.asyncio.create_task") as mock_create, \
+             patch("main.pyaudio.PyAudio") as mock_pyaudio_class:
+            
+            mock_pa_inst = MagicMock()
+            mock_pyaudio_class.return_value = mock_pa_inst
+            mock_pa_inst.get_device_info_by_index.return_value = {'maxInputChannels': 2}
+            
+            res = await client.post(
+                "/api/admin/audio-device",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                json={"device_index": 3}
+            )
+
+        assert res.status_code == 200
+        assert session_state.audio_device_channels == 2
+        
+        # Check that the old soniox task was cancelled
+        mock_soniox_task.cancel.assert_called_once()
+        
+        # create_task should be called twice: once for audio_ingest, once for soniox
+        assert mock_create.call_count == 2
