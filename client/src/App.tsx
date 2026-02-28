@@ -95,6 +95,7 @@ export default function App() {
     const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState('');
     const [isValidating, setIsValidating] = useState(false);
+    const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
     const [sonioxActive, setSonioxActive] = useState(false);
 
     // Desktop left panel Original stream
@@ -425,6 +426,7 @@ export default function App() {
         ws.onopen = () => {
             ws.send(JSON.stringify({ token: sessionToken, is_admin: false }));
             setConnectionState('connected');
+            setHasConnectedOnce(true);
             setErrorMsg('');
         };
 
@@ -768,27 +770,43 @@ export default function App() {
                         )}
                     </div>
 
-                    <div className="flex items-center space-x-2 whitespace-nowrap">
-                        <span className="text-sm text-gray-500 dark:text-gray-400 select-none">Status:</span>
-                        {connectionState === 'connecting' && <span className="text-yellow-500 font-medium">Connecting...</span>}
+                    <div className="flex items-center space-x-2 shrink-0">
+                        <span className="text-gray-500 dark:text-gray-400 font-medium text-sm">Status:</span>
+                        {connectionState === 'connecting' && !hasConnectedOnce && <span className="text-yellow-500 font-medium select-none">Connecting...</span>}
                         {connectionState === 'connected' && sonioxActive && (
-                            <span className="relative group cursor-default text-green-500 font-medium z-10">
-                                ● Live
+                            <span
+                                className="relative group cursor-default text-emerald-500 font-medium flex items-center gap-1.5 select-none z-10"
+                                style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                                onTouchStart={() => { }}
+                            >
+                                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                                </span>
+                                <span>Live</span>
                                 <span className="absolute top-full right-0 mt-2 px-3 py-1.5 bg-gray-800 dark:bg-gray-100 text-white dark:text-gray-900 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg after:content-[''] after:absolute after:bottom-full after:right-4 after:-mb-px after:border-8 after:border-transparent after:border-b-gray-800 dark:after:border-b-gray-100">
                                     Translation streaming is live.
                                 </span>
                             </span>
                         )}
                         {connectionState === 'connected' && !sonioxActive && (
-                            <span className="relative group cursor-default text-yellow-500 font-medium z-10">
+                            <span
+                                className="relative group cursor-default text-yellow-500 font-medium select-none z-10"
+                                style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                                onTouchStart={() => { }}
+                            >
                                 ● Stand By
                                 <span className="absolute top-full right-0 mt-2 px-3 py-1.5 bg-gray-800 dark:bg-gray-100 text-white dark:text-gray-900 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg after:content-[''] after:absolute after:bottom-full after:right-4 after:-mb-px after:border-8 after:border-transparent after:border-b-gray-800 dark:after:border-b-gray-100">
                                     Wait for translation streaming to be activated.
                                 </span>
                             </span>
                         )}
-                        {connectionState === 'error' && (
-                            <span className="relative group cursor-default text-red-500 font-medium z-10">
+                        {(connectionState === 'idle' || connectionState === 'error' || (connectionState === 'connecting' && hasConnectedOnce)) && (
+                            <span
+                                className="relative group cursor-default text-red-500 font-medium select-none z-10"
+                                style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                                onTouchStart={() => { }}
+                            >
                                 Offline
                                 <span className="absolute top-full right-0 mt-2 px-3 py-1.5 bg-gray-800 dark:bg-gray-100 text-white dark:text-gray-900 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg after:content-[''] after:absolute after:bottom-full after:right-4 after:-mb-px after:border-8 after:border-transparent after:border-b-gray-800 dark:after:border-b-gray-100">
                                     The server is not running. Check back later!

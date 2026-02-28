@@ -40,6 +40,7 @@ interface TextSpan {
 
 export default function LiveTranscription({ sessionToken }: LiveTranscriptionProps) {
     const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+    const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
     const [sonioxActive, setSonioxActive] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string>('');
 
@@ -395,6 +396,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
         ws.onopen = () => {
             ws.send(JSON.stringify({ token: sessionToken, is_admin: true }));
             setConnectionState('connected');
+            setHasConnectedOnce(true);
             setErrorMsg('');
         };
 
@@ -674,9 +676,13 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                 </div>
                 <div className="flex items-center space-x-2 whitespace-nowrap shrink-0">
                     <span className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Status:</span>
-                    {connectionState === 'connecting' && <span className="text-yellow-500 font-medium tracking-wide">Connecting...</span>}
+                    {connectionState === 'connecting' && !hasConnectedOnce && <span className="text-yellow-500 font-medium tracking-wide select-none">Connecting...</span>}
                     {connectionState === 'connected' && sonioxActive && (
-                        <span className="relative group cursor-default text-emerald-500 font-medium tracking-wide select-none flex items-center gap-1.5">
+                        <span
+                            className="relative group cursor-default text-emerald-500 font-medium tracking-wide select-none flex items-center gap-1.5"
+                            style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                            onTouchStart={() => { }}
+                        >
                             <span className="relative flex h-2.5 w-2.5 shrink-0">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
@@ -689,7 +695,11 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                         </span>
                     )}
                     {connectionState === 'connected' && !sonioxActive && (
-                        <span className="relative group cursor-default text-yellow-500 font-medium tracking-wide select-none flex items-center">
+                        <span
+                            className="relative group cursor-default text-yellow-500 font-medium tracking-wide select-none flex items-center"
+                            style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                            onTouchStart={() => { }}
+                        >
                             <span>● Stand By</span>
                             <span className={`absolute top-full right-0 mt-3 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50 ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
                                 Wait for translation streaming to be activated.
@@ -697,8 +707,12 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                             </span>
                         </span>
                     )}
-                    {(connectionState === 'idle' || connectionState === 'error') && (
-                        <span className="relative group cursor-default text-rose-500 font-medium tracking-wide select-none flex items-center">
+                    {(connectionState === 'idle' || connectionState === 'error' || (connectionState === 'connecting' && hasConnectedOnce)) && (
+                        <span
+                            className="relative group cursor-default text-rose-500 font-medium tracking-wide select-none flex items-center"
+                            style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                            onTouchStart={() => { }}
+                        >
                             <span>Offline</span>
                             <span className={`absolute top-full right-0 mt-3 px-3 py-1.5 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50 ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}>
                                 The server is not running. Check back later!
@@ -706,7 +720,7 @@ export default function LiveTranscription({ sessionToken }: LiveTranscriptionPro
                             </span>
                         </span>
                     )}
-                    {errorMsg && <span className="text-rose-500 text-xs ml-2">({errorMsg})</span>}
+                    {errorMsg && <span className="text-rose-500 text-xs ml-2 select-none">({errorMsg})</span>}
                 </div>
             </div>
 

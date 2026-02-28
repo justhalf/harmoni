@@ -22,6 +22,7 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
     const analyserLRef = useRef<AnalyserNode | null>(null);
     const analyserRRef = useRef<AnalyserNode | null>(null);
     const [isRendering, setIsRendering] = useState(false);
+    const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
 
     useEffect(() => {
         let ws: WebSocket;
@@ -62,8 +63,9 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
             ws.binaryType = "arraybuffer";
 
             ws.onopen = () => {
-                ws.send(JSON.stringify({ authorization: adminSessionToken }));
+                ws.send(JSON.stringify({ token: adminSessionToken, is_admin: true }));
                 setIsRendering(true);
+                setHasConnectedOnce(true);
             };
 
             let nextStartTime = 0;
@@ -250,7 +252,9 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
                     {numChannels === 2 ? 'Stereo' : 'Mono'} Spectrum Analysis
                 </span>
                 <span>
-                    {isRendering ? (
+                    {!hasConnectedOnce ? (
+                        <span className="text-yellow-500/80 italic tracking-wider text-[10px] uppercase font-semibold animate-pulse">Connecting...</span>
+                    ) : isRendering ? (
                         <div className="flex items-center gap-2">
                             <span className="relative flex h-2.5 w-2.5">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>

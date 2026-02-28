@@ -436,9 +436,9 @@ async def admin_audio_viz(websocket: WebSocket):
         await websocket.close(code=1008)
         return
         
-    authorization = auth_data.get("authorization")
+    token = auth_data.get("token")
     # Requires an active session token on connection
-    if not authorization or authorization not in session_state.admin_sessions:
+    if not token or token not in session_state.admin_sessions:
         await websocket.close(code=1008)
         return
     await manager.connect_viz(websocket)
