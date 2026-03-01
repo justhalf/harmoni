@@ -77,6 +77,29 @@ export default function AdminApp() {
     const [audioFiles, setAudioFiles] = useState<string[]>([]);
     const [selectedAudioDevice, setSelectedAudioDevice] = useState<number | string>(-1);
     const [activeChannels, setActiveChannels] = useState(1);
+    const [audioPlaybackMuted, setAudioPlaybackMuted] = useState(true);
+    const audioPlaybackRef = useRef<HTMLAudioElement>(null);
+
+    const toggleAudioPlayback = () => {
+        const audioEl = audioPlaybackRef.current;
+        if (!audioEl) return;
+
+        if (audioPlaybackMuted) {
+            audioEl.muted = false;
+            if (audioEl.readyState === 0) {
+                audioEl.load();
+            }
+            const playPromise = audioEl.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(e => console.error("Audio playback failed (mobile policy?):", e));
+            }
+            setAudioPlaybackMuted(false);
+        } else {
+            audioEl.muted = true;
+            audioEl.pause();
+            setAudioPlaybackMuted(true);
+        }
+    };
 
     const [sessionNameSelection, setSessionNameSelection] = useState('KU1');
     const [customSessionName, setCustomSessionName] = useState('');
@@ -255,7 +278,11 @@ export default function AdminApp() {
             }));
             // Sync audio device selection from other admins
             if (payload.audio_device_index !== undefined) {
-                setSelectedAudioDevice(payload.audio_device_index ?? -1);
+                setSelectedAudioDevice(prev => {
+                    const newVal = payload.audio_device_index ?? -1;
+                    if (newVal !== prev) setAudioPlaybackMuted(true); // auto-mute on external change
+                    return newVal;
+                });
                 setActiveChannels(payload.audio_device_channels ?? 1);
             }
         } else if (payload.type === 'health') {
@@ -322,6 +349,7 @@ export default function AdminApp() {
             newDeviceIndex = parseInt(value, 10);
         }
         setSelectedAudioDevice(newDeviceIndex);
+        setAudioPlaybackMuted(true); // auto-mute on device change
 
         try {
             const res = await fetchWithAuth('/api/admin/audio-device', {
@@ -416,12 +444,12 @@ export default function AdminApp() {
 
                 <div className="flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
                     <div className="flex-1 flex justify-between items-center w-full">
-                        <div className="flex items-center space-x-4">
-                            <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
+                        <div className="flex items-center space-x-2 sm:space-x-4">
+                            <h1 className="text-xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 tracking-tight">
                                 GPBB Harmoni Admin
                             </h1>
                             {/* System Status Pill (Moved from Box) */}
-                            <div className="flex items-center bg-slate-800/80 px-3 py-1 rounded-full border border-slate-700/50 shadow-sm">
+                            <div className="flex items-center bg-slate-800/80 px-3 py-1 rounded-full border border-slate-700/50 shadow-sm shrink-0 whitespace-nowrap">
                                 {!serverReachable ? (
                                     <span className="text-rose-500 text-sm font-medium tracking-wide select-none">Offline</span>
                                 ) : stats.active && !stats.online ? (
@@ -655,8 +683,34 @@ export default function AdminApp() {
                         <AudioVisualizer
                             wsEndpoint={`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/admin/audio`}
                             adminSessionToken={adminSessionToken}
-                            numChannels={activeChannels}
+                            numChannels={typeof selectedAudioDevice === 'string' && selectedAudioDevice.startsWith('file:') ? 1 : activeChannels}
                         />
+                        {typeof selectedAudioDevice === 'string' && selectedAudioDevice.startsWith('file:') && (
+                            <div className="mt-3 flex items-center gap-2">
+                                <button
+                                    onClick={toggleAudioPlayback}
+                                    className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${audioPlaybackMuted
+                                        ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
+                                        : 'bg-emerald-900/30 border-emerald-700/50 text-emerald-400 hover:bg-emerald-900/50'
+                                        }`}
+                                >
+                                    {audioPlaybackMuted ? '🔇 Unmute' : '🔊 Mute'}
+                                </button>
+                                <audio
+                                    key={`audio-${selectedAudioDevice}`}
+                                    ref={audioPlaybackRef}
+                                    playsInline
+                                    loop
+                                    muted={audioPlaybackMuted}
+                                    src={`${window.location.origin}/audio_samples/${encodeURIComponent(selectedAudioDevice.split(':', 2)[1])}`}
+                                    className="flex-1 h-8 opacity-70"
+                                    controls
+                                    preload="auto"
+                                >
+                                    Your browser does not support the audio element.
+                                </audio>
+                            </div>
+                        )}
                     </div>
                 </div>
 

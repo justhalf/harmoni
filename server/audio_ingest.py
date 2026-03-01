@@ -23,6 +23,8 @@ import struct
 import wave
 from models import ActiveSession
 import logging
+import numpy as np
+import soxr
 
 logger = logging.getLogger("harmoni")
 
@@ -35,85 +37,29 @@ RATE = 16000  # Soniox optimal sample rate (must match RealtimeSTTConfig.sample_
 RECORDING_FLUSH_INTERVAL = 10.0
 
 
-def _convert_wav_frames(raw_frames: bytes, src_channels: int, src_sampwidth: int,
-                        src_rate: int, target_channels: int = 1) -> bytes:
-    """Convert arbitrary PCM wav frames to 16kHz signed-16-bit-LE with a target channel count.
-
-    Args:
-        raw_frames: Raw bytes from wave.readframes()
-        src_channels: Source channel count
-        src_sampwidth: Source sample width in bytes (1, 2, or 4)
-        src_rate: Source sample rate in Hz
-        target_channels: Output channel count (1 for mono visualizer, or src_channels for Soniox passthrough)
-
-    Returns:
-        Converted bytes in s16le format at 16kHz with target_channels.
-    """
-    num_samples = len(raw_frames) // src_sampwidth
-    if num_samples == 0:
+def _resample_for_viz(raw_frames: bytes, src_channels: int, src_sampwidth: int, src_rate: int) -> bytes:
+    """Downmix to mono and resample to 16kHz for the visualizer using C-based soxr."""
+    if len(raw_frames) == 0:
         return b''
-
-    # Step 1: Unpack raw bytes into integer samples
+        
     if src_sampwidth == 1:
-        samples = list(struct.unpack(f'{num_samples}b', raw_frames))
+        # 8-bit PCM is unsigned
+        audio_np = np.frombuffer(raw_frames, dtype=np.uint8).astype(np.float32) - 128.0
+        audio_np *= 256.0
     elif src_sampwidth == 2:
-        samples = list(struct.unpack(f'<{num_samples}h', raw_frames))
+        audio_np = np.frombuffer(raw_frames, dtype=np.int16).astype(np.float32)
     elif src_sampwidth == 4:
-        samples = list(struct.unpack(f'<{num_samples}i', raw_frames))
+        audio_np = np.frombuffer(raw_frames, dtype=np.int32).astype(np.float32) / 65536.0
     else:
         return b''
 
-    # Step 2: Normalize sample values to 16-bit range
-    if src_sampwidth == 1:
-        samples = [s * 256 for s in samples]
-    elif src_sampwidth == 4:
-        samples = [s >> 16 for s in samples]
-
-    # Step 3: Channel conversion
-    # Organize into frames of [ch0, ch1, ...] per time step
-    num_frames = num_samples // src_channels
-    if target_channels == 1 and src_channels > 1:
-        # Downmix to mono (average all channels)
-        mono = []
-        for i in range(num_frames):
-            frame_start = i * src_channels
-            frame_samples = samples[frame_start:frame_start + src_channels]
-            mono.append(sum(frame_samples) // len(frame_samples))
-        output_samples_per_frame = mono
-        out_channels = 1
-    elif target_channels == src_channels:
-        # Keep all channels as-is (multi-channel passthrough for Soniox)
-        output_samples_per_frame = samples
-        out_channels = src_channels
-    else:
-        # Fallback: keep original
-        output_samples_per_frame = samples
-        out_channels = src_channels
-
-    # Step 4: Resample from src_rate to 16000 Hz per channel using linear interpolation
+    if src_channels > 1:
+        audio_np = audio_np.reshape(-1, src_channels).mean(axis=1)
+    
     if src_rate != RATE:
-        ratio = src_rate / RATE
-        new_num_frames = int(num_frames / ratio)
-        resampled = []
-        for i in range(new_num_frames):
-            src_pos = i * ratio
-            idx = int(src_pos)
-            frac = src_pos - idx
-            for ch in range(out_channels):
-                pos_a = idx * out_channels + ch
-                pos_b = (idx + 1) * out_channels + ch
-                if pos_b < len(output_samples_per_frame):
-                    val = int(output_samples_per_frame[pos_a] * (1 - frac) +
-                              output_samples_per_frame[pos_b] * frac)
-                elif pos_a < len(output_samples_per_frame):
-                    val = output_samples_per_frame[pos_a]
-                else:
-                    val = 0
-                resampled.append(max(-32768, min(32767, val)))
-        output_samples_per_frame = resampled
-
-    # Step 5: Pack to s16le bytes
-    return struct.pack(f'<{len(output_samples_per_frame)}h', *output_samples_per_frame)
+        audio_np = soxr.resample(audio_np, src_rate, RATE)
+        
+    return np.clip(audio_np, -32768, 32767).astype(np.int16).tobytes()
 
 
 async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, session: ActiveSession):
@@ -151,6 +97,7 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
             wf_framerate = wf.getframerate()
             # Update session channel count so Soniox configures num_channels correctly
             session.audio_device_channels = wf_channels
+            session.audio_device_framerate = wf_framerate
             logger.info(f"Audio Ingest File Stream Started: {filepath} "
                         f"(channels={wf_channels}, sampwidth={wf_sampwidth}, rate={wf_framerate})")
         except Exception as e:
@@ -170,11 +117,15 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
             input_kwargs["input_device_index"] = session.audio_device_index
 
         stream = p.open(**input_kwargs)
-        logger.info(f"Audio Ingest Stream Started. Device Index: {session.audio_device_index} | Channels: {session.audio_device_channels}")
+        session.audio_device_framerate = RATE
+        logger.info(f"Audio Ingest Stream Started. Device Index: {session.audio_device_index} | Channels: {session.audio_device_channels} | Rate: {RATE}")
     else:
         logger.info("Audio Ingest is Disabled.")
 
     try:
+        next_chunk_time = time.perf_counter()
+        bytes_per_frame = wf_sampwidth * wf_channels
+
         while True:
             # COOPERATIVE SHUTDOWN CHECK (Lesson #1)
             if session.stop_audio_ingest:
@@ -190,27 +141,26 @@ async def audio_ingest_task(queue_a: asyncio.Queue, queue_b: asyncio.Queue, sess
                 if len(raw_data) == 0:
                     wf.rewind()
                     raw_data = wf.readframes(CHUNK)
+                    next_chunk_time = time.perf_counter()
 
-                # For Soniox (Queue A): resample to 16kHz but KEEP original channel count.
-                # Soniox handles multi-channel natively via num_channels in RealtimeSTTConfig.
-                data_for_soniox = _convert_wav_frames(
-                    raw_data, wf_channels, wf_sampwidth, wf_framerate,
-                    target_channels=wf_channels
-                )
-
-                # For Visualizer (Queue B): resample to 16kHz AND downmix to mono.
-                if wf_channels > 1:
-                    data_for_viz = _convert_wav_frames(
-                        raw_data, wf_channels, wf_sampwidth, wf_framerate,
-                        target_channels=1
-                    )
+                # For Soniox (Queue A): stream original raw data UNMODIFIED. 
+                # Configure Soniox client to native framerate instead.
+                data_for_soniox = raw_data
+                
+                # For Visualizer (Queue B): resample to 16kHz AND downmix to mono using C-based soxr.
+                # Offload to thread to ensure minimal event loop blocking.
+                if wf_framerate != RATE or wf_channels > 1:
+                    data_for_viz = await asyncio.to_thread(_resample_for_viz, raw_data, wf_channels, wf_sampwidth, wf_framerate)
                 else:
                     data_for_viz = data_for_soniox
 
-                # Pace playback at real-time speed based on the output (16kHz mono)
-                viz_samples = len(data_for_viz) // 2
-                if viz_samples > 0:
-                    await asyncio.sleep(viz_samples / RATE)
+                # Pace playback at real-time speed based on the ORIGINAL framerate
+                frames_in_chunk = len(raw_data) // bytes_per_frame
+                if frames_in_chunk > 0:
+                    sleep_time = next_chunk_time - time.perf_counter()
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
+                    next_chunk_time += frames_in_chunk / wf_framerate
                 else:
                     await asyncio.sleep(0.01)
 

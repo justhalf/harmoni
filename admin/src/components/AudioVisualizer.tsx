@@ -14,11 +14,13 @@ interface VisualizerProps {
     wsEndpoint: string;
     adminSessionToken: string;
     numChannels: number;
+    playAudio?: boolean;
 }
 
-export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChannels }: VisualizerProps) {
+export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChannels, playAudio = false }: VisualizerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
+    const gainRef = useRef<GainNode | null>(null);
     const analyserLRef = useRef<AnalyserNode | null>(null);
     const analyserRRef = useRef<AnalyserNode | null>(null);
     const [isRendering, setIsRendering] = useState(false);
@@ -38,9 +40,10 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
             analyserL.fftSize = 256;
             analyserLRef.current = analyserL;
 
-            const silentNode = audioCtx.createGain();
-            silentNode.gain.value = 0;
-            silentNode.connect(audioCtx.destination);
+            const outputNode = audioCtx.createGain();
+            outputNode.gain.value = playAudio ? 1.0 : 0;
+            outputNode.connect(audioCtx.destination);
+            gainRef.current = outputNode;
 
             if (numChannels === 2) {
                 const analyserR = audioCtx.createAnalyser();
@@ -51,12 +54,12 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
                 splitter.connect(analyserL, 0);
                 splitter.connect(analyserR, 1);
 
-                analyserL.connect(silentNode);
-                analyserR.connect(silentNode);
+                analyserL.connect(outputNode);
+                analyserR.connect(outputNode);
                 // The source will connect to the splitter
             } else {
                 analyserRRef.current = null;
-                analyserL.connect(silentNode);
+                analyserL.connect(outputNode);
             }
 
             ws = new WebSocket(wsEndpoint);
@@ -66,6 +69,15 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
                 ws.send(JSON.stringify({ token: adminSessionToken, is_admin: true }));
                 setIsRendering(true);
                 setHasConnectedOnce(true);
+
+                // Add an interaction listener to resume the AudioContext if it started suspended (e.g. on page refresh)
+                const resumeOnInteraction = () => {
+                    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+                        audioCtxRef.current.resume();
+                    }
+                };
+                document.addEventListener('click', resumeOnInteraction, { once: true });
+                document.addEventListener('touchstart', resumeOnInteraction, { once: true });
             };
 
             let nextStartTime = 0;
@@ -170,7 +182,14 @@ export default function AudioVisualizer({ wsEndpoint, adminSessionToken, numChan
             }
             if (audioCtx) audioCtx.close();
         };
-    }, [wsEndpoint, adminSessionToken, numChannels]);
+    }, [wsEndpoint, adminSessionToken, numChannels, playAudio]);
+
+    // Dynamically update gain without reconnecting
+    useEffect(() => {
+        if (gainRef.current) {
+            gainRef.current.gain.value = playAudio ? 1.0 : 0;
+        }
+    }, [playAudio]);
 
     useEffect(() => {
         if (!canvasRef.current) return;

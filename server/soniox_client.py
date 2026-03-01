@@ -52,7 +52,7 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
     config = RealtimeSTTConfig(
         model="stt-rt-v4",
         audio_format="pcm_s16le",
-        sample_rate=16000,
+        sample_rate=session.audio_device_framerate,
         num_channels=session.audio_device_channels,
         language_hints=["id", "en"],
         language_hints_strict=False,
@@ -169,6 +169,12 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                         audio_queue.get_nowait()
                     except asyncio.QueueEmpty:
                         break
+                        
+                import time
+                # Calculate elapsed time since the session started.
+                # Since the queue is flushed, the next audio chunk reflects time.time().
+                offset_ms = int((time.time() - session.session_start_ts) * 1000) if session.session_start_ts > 0 else 0
+                logger.info(f"Soniox connected. Applying session offset of {offset_ms}ms to all tokens.")
                 
                 await manager.broadcast({
                     "type": "status",
@@ -200,6 +206,15 @@ async def soniox_translation_task(audio_queue: asyncio.Queue, manager: Connectio
                             
                             # Broadcast the model dict back to clients
                             payload = event.model_dump(exclude_none=True)
+                            
+                            # Align timestamps to session start (absolute time offset)
+                            if "tokens" in payload and payload["tokens"]:
+                                for t_dict in payload["tokens"]:
+                                    if "start_ms" in t_dict:
+                                        t_dict["start_ms"] += offset_ms
+                                    if "end_ms" in t_dict:
+                                        t_dict["end_ms"] += offset_ms
+                                        
                             await manager.broadcast(payload)
                             
                             if event.finished:

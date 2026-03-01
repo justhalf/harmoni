@@ -1,0 +1,30 @@
+[
+  {
+    "index": 0,
+    "name": "Microsoft Sound Mapper - Input (MME)",
+    "channels": 2,
+    "defaultSampleRate": 44100.0,
+    "score": 1
+  },
+  {
+    "index": 9,
+    "name": "Primary Sound Capture Driver (Windows DirectSound)",
+    "channels": 2,
+    "defaultSampleRate": 44100.0,
+    "score": 2
+  },
+  {
+    "index": 23,
+    "name": "Microphone (SteelSeries Arctis 1 Wireless) (Windows WASAPI)",
+    "channels": 1,
+    "defaultSampleRate": 48000.0,
+    "score": 3
+  },
+  {
+    "index": 24,
+    "name": "Microphone (C922 Pro Stream Webcam) (Windows WASAPI)",
+    "channels": 2,
+    "defaultSampleRate": 16000.0,
+    "score": 3
+  }
+]

@@ -43,10 +43,11 @@ class ActiveSession(BaseModel):
     soniox_connected: bool = False
     soniox_activated: bool = False  # True only when admin explicitly enables translation
     current_session_name: Optional[str] = None # Captures the active "KU1" / "Custom" name for the recordings
+    session_start_ts: float = 0.0 # Absolute time.time() when the session started
     audio_device_index: Optional[Union[int, str]] = None
-    # Channel count is stored so audio_ingest can downmix stereo→mono for Soniox.
-    # See Lesson #4: Some USB mics report maxInputChannels > 1; Soniox expects mono PCM.
     audio_device_channels: int = 1
+    # Sample rate is stored so Soniox knows what framerate the raw PCM input uses.
+    audio_device_framerate: int = 16000
     # Cooperative shutdown flag for audio_ingest_task. Setting this to True causes
     # the ingest loop to break cleanly on the next iteration, avoiding segfaults
     # from cancelling a blocking PyAudio C-level read. See Lesson #1.
@@ -110,8 +111,7 @@ class ConnectionManager:
         self.admin_viz_connections.add(websocket)
 
     def disconnect_viz(self, websocket: WebSocket):
-        if websocket in self.admin_viz_connections:
-            self.admin_viz_connections.remove(websocket)
+        self.admin_viz_connections.discard(websocket)
 
     async def kick_unauthorized(self):
         """Forcefully disconnect all standard client connections. Admins are immune.

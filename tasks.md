@@ -1,0 +1,5 @@
+Demo Mode — spec needed for a server-side Demo Mode audio input that simulates text arriving on repeat every few seconds
+Expired JWT / auth failure UX — spec needed so audio visualizer stops retrying when authentication clearly fails (e.g., detected by close code or error type)
+Display UX improvements — spec needed for a more Christ-centered sermon listening and managing experience for both admin and client views
+Adjust "Connecting..." status so that it only displays the first time client tries to connect, and not on subsequent reconnections, in both admin and client views, in transcript and in audio visualizer
+Check that the connection status is not selectable, and it should probably do preventDefault as well. This ensures that the pop up appearing when tapping on it doesn't trigger browser's default behavior. But it should still allow the pop up to appear. This is for both mobile and desktop.

@@ -53,3 +53,5 @@ venv.bak/
 # OS config
 .DS_Store
 Thumbs.db
+
+server/sessions/

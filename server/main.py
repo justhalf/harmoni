@@ -133,7 +133,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Public Endpoints ---
+# Serve audio sample files at native quality for admin playback
+from starlette.staticfiles import StaticFiles
+audio_samples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "audio_samples")
+if os.path.isdir(audio_samples_dir):
+    app.mount("/audio_samples", StaticFiles(directory=audio_samples_dir), name="audio_samples")
 
 @app.websocket("/ws/listen")
 async def websocket_endpoint(websocket: WebSocket):
@@ -300,6 +304,8 @@ async def toggle_session(req: SessionToggleReq, _=Depends(verify_admin)):
                 
         session_state.soniox_activated = True
         session_state.current_session_name = req.session_name
+        import time
+        session_state.session_start_ts = time.time()
         
         app.state.soniox_task = asyncio.create_task(
             soniox_translation_task(app.state.audio_queue_a, manager, session_state)
@@ -602,25 +608,32 @@ async def update_audio_device(req: AudioDeviceUpdateReq, _=Depends(verify_admin)
 @app.websocket("/ws/admin/audio")
 async def admin_audio_viz(websocket: WebSocket):
     await websocket.accept()
+    
+    async def safe_close(code: int):
+        try:
+            await websocket.close(code=code)
+        except Exception:
+            pass
+
     try:
         auth_data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
     except Exception:
-        await websocket.close(code=1008)
+        await safe_close(1008)
         return
         
     token = auth_data.get("token")
     if not token:
-        await websocket.close(code=1008)
+        await safe_close(1008)
         return
         
     try:
         payload = jwt.decode(token, session_state.jwt_secret, algorithms=["HS256"])
         if payload.get("type") != "access":
-            await websocket.close(code=1008)
+            await safe_close(1008)
             return
     except Exception:
         # Catch expired or invalid signatures
-        await websocket.close(code=1008)
+        await safe_close(1008)
         return
         
     await manager.connect_viz(websocket)
@@ -628,5 +641,8 @@ async def admin_audio_viz(websocket: WebSocket):
         while True:
             # Continually read to detect client disconnects
             await websocket.receive_text()
-    except WebSocketDisconnect:
+    except Exception as e:
+        # Catch WebSocketDisconnect and any other errors that cause disconnects
+        logger.info(f"Admin viz websocket disconnected: {e}")
+    finally:
         manager.disconnect_viz(websocket)
